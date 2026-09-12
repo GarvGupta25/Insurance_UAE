@@ -40,10 +40,12 @@ from .models import (
     Quote,
     Receipt,
     Run,
+    SourceSnapshot,
     now,
 )
 from .payments import razorpay_request, settle, verify_order
 from .services import apply_facts, command, own, profile, visible_facts
+from .sources import registry
 from .voice import validate_audio
 
 app = FastAPI(title="Helm AI", version="0.1.0")
@@ -148,6 +150,30 @@ def capabilities():
 @app.get("/api/catalogue")
 def catalogue():
     return {"plans": plans(), "mode": "synthetic_demo", "source": "Supplied challenge catalogue v3"}
+
+
+@app.get("/api/sources")
+def public_sources(db: Session = Depends(session)):
+    """Registry and freshness only: unreviewed pages cannot become quote terms."""
+    result = []
+    for entry in registry():
+        latest = db.scalar(
+            select(SourceSnapshot)
+            .where(SourceSnapshot.source_id == entry["id"])
+            .order_by(SourceSnapshot.fetched_at.desc())
+            .limit(1)
+        )
+        result.append(
+            {
+                "id": entry["id"],
+                "insurer": entry["insurer"],
+                "title": entry["title"],
+                "url": entry["url"],
+                "last_checked": latest.fetched_at.isoformat() if latest else None,
+                "verification": latest.verification if latest else "not_retrieved",
+            }
+        )
+    return {"items": result, "notice": "Public research links are separate from the fictional comparison. No live insurer price or eligibility has been verified."}
 
 
 @app.get("/api/me/profile")

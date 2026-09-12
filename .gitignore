@@ -16,4 +16,4 @@ test-results/
 .runtime/
 supabase/.temp/
 supabase/.branches/
-
+*.tsbuildinfo

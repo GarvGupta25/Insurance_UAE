@@ -140,3 +140,15 @@ class Audit(Owned, Base):
     action: Mapped[str] = mapped_column(String(60))
     subject_id: Mapped[str] = mapped_column(String(36))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SourceSnapshot(Base):
+    __tablename__ = "source_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    source_id: Mapped[str] = mapped_column(String(80), index=True)
+    url: Mapped[str] = mapped_column(String(1000))
+    mime: Mapped[str] = mapped_column(String(40))
+    sha256: Mapped[str] = mapped_column(String(64))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    excerpt: Mapped[str] = mapped_column(String(12000))
+    verification: Mapped[str] = mapped_column(String(30), default="unreviewed")
