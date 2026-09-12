@@ -1,0 +1,162 @@
+import calendar
+import hashlib
+import json
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
+
+DATA = Path(__file__).resolve().parents[1] / "data"
+
+
+def digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+
+
+def plans():
+    return json.loads((DATA / "hackathon_data.json").read_text(encoding="utf-8-sig"))["plans"]
+
+
+def money(value):
+    return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def compare(facts):
+    results = []
+    for plan in plans():
+        gaps, unknowns, reasons = [], [], []
+        if facts.get("maternity"):
+            term = plan["maternity"]
+            if not term["covered"]:
+                gaps.append("Maternity is excluded.")
+            elif term["waiting_period_months"] > facts.get("maximum_maternity_wait", 24):
+                gaps.append(
+                    f"Maternity starts after {term['waiting_period_months']} months, later than your stated need."
+                )
+            else:
+                reasons.append(
+                    f"Maternity becomes available after {term['waiting_period_months']} months, within your stated wait."
+                )
+        if facts.get("diagnosed_conditions") == "yes":
+            term = plan["chronic_preexisting"]
+            if not term["covered"]:
+                gaps.append("Declared existing conditions are excluded.")
+            elif term["waiting_period_months"] and facts.get("immediate_chronic_cover"):
+                gaps.append(f"Existing-condition cover has a {term['waiting_period_months']}-month gap.")
+            else:
+                reasons.append(f"Existing-condition waiting period: {term['waiting_period_months']} months.")
+        if facts.get("diagnosed_conditions") in ["unknown", "declined"]:
+            unknowns.append("Existing-condition requirements need clarification.")
+        tiers = {"restricted": 0, "standard": 1, "wide": 2}
+        preferred = facts.get("preferred_network")
+        if preferred and tiers[plan["network"]] < tiers[preferred]:
+            gaps.append("The network is narrower than your requested access.")
+        dental = facts.get("dental")
+        if (
+            dental
+            and {"none": 0, "basic": 1, "full": 2}[plan["dental_optical"]]
+            < {"none": 0, "basic": 1, "full": 2}[dental]
+        ):
+            gaps.append("Dental/optical benefits do not meet your preference.")
+        if facts.get("preferred_provider"):
+            unknowns.append("Your named provider needs exact network verification.")
+        if facts.get("geography") in ["international", "unsure"]:
+            unknowns.append("The supplied plans do not specify overseas coverage.")
+        budget = facts.get("annual_budget")
+        if budget is not None and plan["annual_premium"] > budget:
+            text = f"Annual premium is AED {plan['annual_premium'] - budget:,} above your budget."
+            (gaps if facts.get("strict_budget") else reasons).append(text)
+        reasons.append(
+            f"{plan['network'].capitalize()} network; {plan['outpatient_copay_pct']}% member copay after the deductible."
+        )
+        results.append(
+            {
+                "plan": plan,
+                "status": "does_not_meet_requirement"
+                if gaps
+                else "needs_more_information"
+                if unknowns
+                else "supported",
+                "gaps": gaps,
+                "unknowns": unknowns,
+                "reasons": reasons,
+                "premium_fils": money(plan["annual_premium"]),
+                "monthly_budget_equivalent_fils": int(
+                    (Decimal(plan["annual_premium"]) * 100 / 12).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                ),
+                "source": "Supplied fictional challenge catalogue v3",
+                "source_id": plan["id"],
+            }
+        )
+    # Explicit access/benefit constraints precede premium; low member-cost preference is a transparent tie-breaker.
+    results.sort(
+        key=lambda x: (
+            {"supported": 0, "needs_more_information": 1, "does_not_meet_requirement": 2}[x["status"]],
+            x["plan"]["outpatient_copay_pct"] if facts.get("cost_sharing") == "lower_member_cost" else 0,
+            x["premium_fils"],
+            x["plan"]["id"],
+        )
+    )
+    return results
+
+
+def installments(total_fils: int, start: str, count: int):
+    if total_fils < 0 or count not in (1, 12):
+        raise ValueError("Unsupported schedule")
+    initial = date.fromisoformat(start)
+    base, remainder = divmod(total_fils, count)
+    rows = []
+    for index in range(count):
+        absolute_month = initial.year * 12 + initial.month - 1 + index
+        year, month_zero = divmod(absolute_month, 12)
+        day = min(initial.day, calendar.monthrange(year, month_zero + 1)[1])
+        rows.append(
+            {
+                "position": index + 1,
+                "due_date": date(year, month_zero + 1, day).isoformat(),
+                "amount": base + (remainder if index == count - 1 else 0),
+            }
+        )
+    return rows
+
+
+def map_application(plan_id, facts, email):
+    if plan_id == "plan_a":
+        payload = {
+            "applicant": {
+                "full_name": facts.get("legal_name"),
+                "birth_date": facts.get("date_of_birth"),
+                "emirate": facts.get("emirate"),
+                "email": email,
+            },
+            "health_declaration": {k: facts.get(k) for k in ["diagnosed_conditions", "conditions", "smoker"]},
+            "funding": {
+                k: facts.get(k) for k in ["payer", "company_name", "sponsor_name", "contribution_aed"]
+            },
+        }
+        schema = "sandbox-essential-v1"
+    else:
+        payload = {
+            "memberName": facts.get("legal_name"),
+            "dob": facts.get("date_of_birth"),
+            "residence": {"region": facts.get("emirate"), "category": facts.get("residency")},
+            "contactEmail": email,
+            "medical": {
+                "declared": facts.get("diagnosed_conditions"),
+                "conditions": facts.get("conditions", []),
+                "smoking": facts.get("smoker"),
+            },
+            "payerType": facts.get("payer"),
+            "sponsor": facts.get("company_name") or facts.get("sponsor_name"),
+            "contributionAED": facts.get("contribution_aed"),
+        }
+        schema = "sandbox-extended-v1"
+    return {
+        "schema": schema,
+        "payload": payload,
+        "destination": "Helm in-app carrier sandbox",
+        "provenance": {key: "saved profile" for key in payload},
+    }
