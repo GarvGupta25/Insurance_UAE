@@ -1,0 +1,18 @@
+[
+  {
+    "id": "daman_individual",
+    "insurer": "Daman",
+    "title": "Individual and family health insurance",
+    "url": "https://www.damanhealth.ae/",
+    "host": "www.damanhealth.ae",
+    "kind": "product_overview"
+  },
+  {
+    "id": "adnic_medical",
+    "insurer": "ADNIC",
+    "title": "Medical insurance",
+    "url": "https://www.adnic.ae/web/guest/medical-insurance",
+    "host": "www.adnic.ae",
+    "kind": "product_overview"
+  }
+]

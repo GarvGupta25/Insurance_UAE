@@ -13,6 +13,7 @@ It never presents a fictional plan as real cover. A quote is indicative; a sandb
 - Two application mappings, snapshot hashing, explicit declaration confirmation and an in-app carrier sandbox.
 - Portfolio, frozen policy terms, a monthly/annual simulated schedule, idempotent local payments and an optional Razorpay test adapter.
 - Fictional provider list/map, source-labelled updates, keyboard-accessible responsive screens and shared voice components.
+- An approved official-page registry and bounded source refresh for independent research; those unreviewed pages never set sandbox premiums or policy terms.
 - Voice capture is short push-to-talk, with an editable transcript before it becomes a message. Optional read-aloud uses the browser voice. Audio is only sent to Groq when `GROQ_API_KEY` is configured and is not stored by Helm.
 
 ## Run locally
@@ -23,6 +24,8 @@ Requirements: Node 22+, Python 3.12, `uv`, Docker Desktop and the local Supabase
 2. Run `npx supabase status -o json 2>$null | uv run python scripts/configure_local.py` from `backend/` once. It writes ignored local `.env` files without printing keys.
 3. Run `uv sync --python 3.12` in `backend/`, then start the API with `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000` and the worker with `uv run python -m app.worker`.
 4. Run `npm install` in `frontend/`, then `npm run dev -- --port 5173`. Open `http://127.0.0.1:5173`.
+
+For public-source evidence, run `uv run python -m scripts.refresh_sources` from `backend/` after the migrations. Failed source fetches keep previous evidence; they do not invent terms. See [docs/SOURCE_REGISTRY.md](docs/SOURCE_REGISTRY.md).
 
 For the Groq chat/transcription integration, put `GROQ_API_KEY` in `backend/.env`. The app accurately degrades to manual profile editing when it is absent. To test Razorpay, set `PAYMENT_PROVIDER=razorpay` and use only `rzp_test_` credentials. The default is the local simulator.
 
@@ -44,6 +47,10 @@ npm run build
 ```
 
 The last backend command uses a new synthetic local Supabase account and checks the entire authenticated flow. It does not use a real carrier, payment or Groq credential.
+
+## Local data backup
+
+With Supabase running, create a public-schema backup with `npx supabase db dump --local -f schema-backup.sql` and a public-data backup with `npx supabase db dump --local --data-only -f data-backup.sql`. Store both outside Git in a protected location because profiles and messages may contain sensitive data. To restore an existing local instance after migrations are applied, load the data backup with `psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -f data-backup.sql`. This CLI dump excludes Supabase-managed Auth data, so it is **not** a complete account recovery backup; keep a separate platform-level database backup for that purpose and test recovery in an isolated instance. Raw uploaded documents and voice audio are not retained.
 
 ## Project map
 
