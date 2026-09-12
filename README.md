@@ -29,6 +29,8 @@ For public-source evidence, run `uv run python -m scripts.refresh_sources` from 
 
 For the Groq chat/transcription integration, put `GROQ_API_KEY` in `backend/.env`. The app accurately degrades to manual profile editing when it is absent. To test Razorpay, set `PAYMENT_PROVIDER=razorpay` and use only `rzp_test_` credentials. The default is the local simulator.
 
+Image OCR additionally requires a local Tesseract executable; set `TESSERACT_CMD` in `backend/.env` to its full path on Windows if it is not on `PATH`. Text-based PDFs can be extracted without Tesseract. An unreadable image or unavailable OCR keeps manual entry available. `backend/.env.example` documents every optional variable. For Razorpay test checkout, configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET`, and point the test webhook to `/api/webhooks/razorpay`; the adapter refuses live keys. Verify your test account supports the proposed currency before selecting Razorpay mode.
+
 ## Verification
 
 From `backend/`:
@@ -60,4 +62,4 @@ With Supabase running, create a public-schema backup with `npx supabase db dump 
 - `backend/data/hackathon_data.json` — unchanged supplied fictional plan/profile fixture source.
 - `docs/` — delivery boundary, schema and operational decisions.
 
-Read [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md), [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) and [docs/DECISIONS.md](docs/DECISIONS.md) before extending the product.
+Read [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md), [docs/PHASE_ONE_WALKTHROUGH.md](docs/PHASE_ONE_WALKTHROUGH.md), [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md), [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) and [docs/DECISIONS.md](docs/DECISIONS.md) before extending the product.
