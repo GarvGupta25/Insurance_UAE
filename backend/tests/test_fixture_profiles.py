@@ -67,3 +67,13 @@ def test_original_applicants_can_get_real_quotations_without_identity_or_payment
         assert snapshot["recommended_plan_id"] == expected[profile["id"]]
         assert snapshot["classification"]["cohort"] == classify(facts)["cohort"]
         assert len(snapshot["items"]) == 3
+        if profile["id"] == "P3":
+            prepared = client.post(
+                "/api/applications/prepare",
+                json={"quote_id": quote.json()["id"], "plan_id": "plan_b"},
+                headers={"Idempotency-Key": str(uuid4())},
+            )
+            assert prepared.status_code == 200, prepared.text
+            broker_queue = client.get("/api/broker/recommendations").json()
+            assert broker_queue[0]["certainty"] == "tradeoff"
+            assert "6-month waiting period" in broker_queue[0]["summary"]["decision_brief"]["main_uncertainty"]

@@ -504,7 +504,7 @@ def prepare_application(
                 "alternatives": [candidate for candidate in quote.snapshot["items"] if candidate["plan"]["id"] != body.plan_id],
                 "decision_brief": {
                     "requested_decision": "Approve the recommended demo plan for submission.",
-                    "main_uncertainty": item["unknowns"][0] if item["unknowns"] else None,
+                    "main_uncertainty": (item["tradeoffs"] or item["unknowns"] or [None])[0],
                     "next_action": "Review the plan comparison and approve or change the recommendation.",
                 },
             },
