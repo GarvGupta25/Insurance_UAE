@@ -199,6 +199,11 @@ def public_sources(db: Session = Depends(session)):
     return {"items": result, "notice": "Public research links are separate from the fictional comparison. No live insurer price or eligibility has been verified."}
 
 
+@app.get("/api/me/access")
+def get_access(user: User = Depends(current_user)):
+    return {"role": user.role}
+
+
 @app.get("/api/me/profile")
 def get_profile(user: User = Depends(current_user), db: Session = Depends(session)):
     row = profile(db, user)

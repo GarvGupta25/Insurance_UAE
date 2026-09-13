@@ -120,7 +120,7 @@ export function BrokerWorkspace() {
 
   return <>
     <div className="page-heading compact"><div><span className="eyebrow">BROKER WORKSPACE</span><h1>Review the recommendation.<br/>Keep the member in control.</h1><p>Check the documented fit and approve or change the supported plan before the member submits.</p></div><ClipboardCheck className="heading-icon" size={54}/></div>
-    <div className="notice broker-notice"><AlertCircle size={19}/><div><strong>Demonstration review</strong><br/>This workspace uses the same demo account for the member and broker. Production broker assignment and role controls are not configured.</div></div>
+    <div className="notice broker-notice"><AlertCircle size={19}/><div><strong>Demonstration review</strong><br/>Only cases assigned to your broker account appear here. Member submissions remain separate from your review decisions.</div></div>
     <div className="metric-grid broker-metrics"><div><span>Awaiting review</span><strong>{pending.length}</strong><small>Prepared applications needing a decision</small></div><div><span>Needs attention</span><strong>{uncertain.length + pendingAppeals.length + pendingReassessments.length}</strong><small>Recommendations, appeals, or fit checks awaiting a decision</small></div><div><span>Reviewed</span><strong>{rows.length - pending.length}</strong><small>Recommendations ready for member confirmation</small></div></div>
     {message && <div className="notice" role="status">{message}</div>}
     {error && <ErrorView error={new Error(error)}/>} 

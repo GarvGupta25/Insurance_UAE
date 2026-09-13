@@ -13,6 +13,7 @@ It never presents a fictional plan as real cover. A quote is indicative; a sandb
 - Two application mappings, snapshot hashing, explicit declaration confirmation and an in-app carrier sandbox.
 - Portfolio, frozen policy terms, a monthly/annual simulated schedule, idempotent local payments and an optional Razorpay test adapter.
 - Broker review before a prepared application can be confirmed, including the documented fit brief and supported-plan edits.
+- Separate broker Auth accounts and administrator-managed case assignments; see [docs/BROKER_SETUP.md](docs/BROKER_SETUP.md).
 - Deterministic pre-authorisation, claim and reimbursement servicing with an append-only history and rebuildable benefit ledger.
 - Member appeal submission, broker uphold/overturn decisions, corrected effective revisions and history-aware policy-fit reassessments.
 - Fictional provider list/map, source-labelled updates, keyboard-accessible responsive screens and shared voice components.

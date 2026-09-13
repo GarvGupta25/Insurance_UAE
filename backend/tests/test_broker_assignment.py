@@ -47,6 +47,7 @@ def test_broker_queue_and_review_are_hidden_from_members_and_unassigned_brokers(
     quote = send(f"/api/cases/{case}/quotes").json()["id"]
     application = send("/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
     recommendation_id = client.get(f"/api/applications/{application}").json()["recommendation_id"]
+    assert client.get("/api/me/access").json() == {"role": "member"}
     assert client.get("/api/broker/recommendations").status_code == 403
     assert send(f"/api/broker/recommendations/{recommendation_id}/review", {"action": "approve"}).status_code == 403
     member = owner[0]
@@ -55,5 +56,6 @@ def test_broker_queue_and_review_are_hidden_from_members_and_unassigned_brokers(
     assert send(f"/api/broker/recommendations/{recommendation_id}/review", {"action": "approve"}).status_code == 404
     owner[0] = member
     with as_assigned_broker(owner, engine):
+        assert client.get("/api/me/access").json() == {"role": "broker"}
         assert [item["id"] for item in client.get("/api/broker/recommendations").json()] == [recommendation_id]
         assert send(f"/api/broker/recommendations/{recommendation_id}/review", {"action": "approve"}).status_code == 200
