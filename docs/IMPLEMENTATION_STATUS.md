@@ -1,21 +1,21 @@
-# Phase 1 implementation status
+# Integrated implementation status
 
-Current authority: user's request to implement Phase 1 of the attached Downloads `revisedPLAN.md` version 2.0, with voice promoted into the relevant Phase 1 interactions. The unfinished workspace v3 revision is reference material, not the active phase boundary.
+Current authority: the user's combined Version 2/Version 3 workflow, restricted to the supplied fictional catalogue and saved demo inputs. Target: `GarvGupta25/Insurance_UAE`, branch `main`.
 
-Phase 1 includes P1.0–P1.7, not only scaffolding. The user explicitly requested completion and a GitHub push in the current turn. Phase 2 awaits a separate request. Target: `GarvGupta25/Insurance_UAE`, branch `codex/phase-1`.
-
-| Gate | Status |
+| Workflow gate | Status |
 | --- | --- |
-| Foundation, database migrations and ownership | Complete |
-| Supabase authentication and returning users | Complete locally |
-| Three-stage persisted conversational intake | Complete |
+| Supabase-ready account ownership and returning users | Complete locally |
+| Three-stage conversational and editable profile intake | Complete |
 | Identity extraction with review/manual fallback | Complete |
-| Versioned fictional catalogue, comparison and quotation PDF | Complete for sandbox |
-| Official-source registry and bounded refresh | Implemented; source facts remain unreviewed and outside matching |
-| Two application mappings and exact confirmation | Complete |
-| Policy portfolio and sandbox payment receipts | Complete |
-| Provider map/list and sourced notices | Fictional network shown; no verified policy notice exists yet |
-| Voice capture, transcript review and optional playback | Complete; live STT check requires a Groq key |
-| Automated checks, browser checks and handoff | 23 backend tests, frontend type/build and prior browser checks pass; latest database migration is not live-rechecked |
+| Supplied fictional catalogue, comparison and quotation PDF | Complete |
+| Easy Fill, mandatory broker review and member confirmation | Complete |
+| Sandbox policy, payment receipt, portfolio and fictional provider map | Complete |
+| Pre-authorisation, claim and reimbursement evaluation | Complete |
+| Append-only servicing history and rebuildable ledger | Complete |
+| Member appeal, broker uphold/overturn and effective replay | Complete |
+| History-aware reassessment and broker retain/future recommendation | Complete |
+| Durable case-level conversational context | Complete |
+| Backend validation | 32 tests and Ruff pass |
+| Frontend validation | TypeScript check and production build pass |
 
-Local Supabase and the sandbox path were exercised with an authenticated synthetic account on the initial migration. The queued agent was verified by an isolated database test; its full Postgres checkpoint path and the new source-snapshot migration still need a live rerun because Docker's local service is stopped. Live Groq transcription/chat and Razorpay test mode require their own keys and remain clearly unavailable until configured. They are not represented as passed integrations. Official product facts, carrier connectivity and real provider-network membership also require review/agreements, so real cover cannot be bought here.
+The broker workspace intentionally uses the same demo account as the member. It records all decisions but is not a production role/assignment system. The workflow never uses live insurer, provider, underwriting, payment, or product data: plans, providers, cover, payments and recommendations remain fictional demonstrations. Optional Groq and Razorpay test paths need local keys to run; they are not required for the supplied-data workflow.
