@@ -1,7 +1,8 @@
 from dataclasses import dataclass
+from typing import Literal
 
 import httpx
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from .config import settings
 
@@ -10,6 +11,7 @@ from .config import settings
 class User:
     id: str
     email: str
+    role: Literal["member", "broker"] = "member"
 
 
 def current_user(authorization: str = Header(default="")) -> User:
@@ -33,4 +35,12 @@ def current_user(authorization: str = Header(default="")) -> User:
     if response.status_code != 200:
         raise HTTPException(401, "Your session expired. Please sign in again.")
     body = response.json()
-    return User(id=body["id"], email=body.get("email", ""))
+    # app_metadata is controlled by Supabase administrators; user_metadata is not.
+    role = "broker" if body.get("app_metadata", {}).get("helm_role") == "broker" else "member"
+    return User(id=body["id"], email=body.get("email", ""), role=role)
+
+
+def require_broker(user: User = Depends(current_user)) -> User:
+    if user.role != "broker":
+        raise HTTPException(403, "A broker account is required for this review.")
+    return user
