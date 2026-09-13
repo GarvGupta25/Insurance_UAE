@@ -2,18 +2,28 @@ import { useState } from 'react';
 import { Check, ChevronDown, UploadCloud, LoaderCircle } from 'lucide-react';
 import { api, post } from './api';
 
-export const groups = ['About you', 'Health and cover', 'Funding and preferences'];
+const extendedGroups = ['About you', 'Health and cover', 'Funding and preferences'];
+const challengeGroups = ['About you', 'Health and upcoming care', 'Budget and priorities'];
 type Field = { key: string; label: string; type?: string; options?: string[] };
-const registry: Field[][] = [
+const challengeRegistry: Field[][] = [
+  [{ key: 'display_name', label: 'Name to display (optional)' }, { key: 'age', label: 'Age', type: 'number' }, { key: 'marital_status', label: 'Marital status', options: ['single', 'married', 'divorced', 'widowed'] }, { key: 'smoker', label: 'Do you smoke?', options: ['yes', 'no', 'unknown', 'declined'] }],
+  [{ key: 'diagnosed_conditions', label: 'Diagnosed conditions', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'conditions', label: 'Declared conditions, separated by commas', type: 'list' }, { key: 'near_term_needs', label: 'Upcoming care needs, separated by commas', type: 'list' }],
+  [{ key: 'budget_category', label: 'Budget comfort', options: ['low', 'moderate', 'comfortable', 'not primary concern'] }, { key: 'priorities', label: 'What matters most, separated by commas', type: 'list' }],
+];
+const extendedRegistry: Field[][] = [
   [{ key: 'legal_name', label: 'Full name' }, { key: 'date_of_birth', label: 'Date of birth', type: 'date' }, { key: 'nationality', label: 'Nationality' }, { key: 'residency', label: 'Residency', options: ['citizen', 'resident', 'visitor', 'pending'] }, { key: 'emirate', label: 'Emirate', options: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Fujairah', 'Ras Al Khaimah', 'Umm Al Quwain'] }, { key: 'area', label: 'City / area (optional)' }, { key: 'mobile', label: 'Mobile (optional)' }],
   [{ key: 'diagnosed_conditions', label: 'Diagnosed conditions', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'conditions', label: 'Conditions, separated by commas', type: 'list' }, { key: 'medications', label: 'Regular medicines (optional)', type: 'list' }, { key: 'existing_cover', label: 'Existing insurance (optional)', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'smoker', label: 'Do you smoke?', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'maternity', label: 'Include maternity?', type: 'boolean' }, { key: 'maximum_maternity_wait', label: 'Maximum maternity wait (months)', type: 'number' }, { key: 'immediate_chronic_cover', label: 'Existing-condition cover from day one?', type: 'boolean' }, { key: 'geography', label: 'Where do you need cover?', options: ['UAE', 'international', 'unsure'] }, { key: 'start_date', label: 'Desired coverage start', type: 'date' }, { key: 'upcoming_care', label: 'Upcoming care (optional)' }, { key: 'dental', label: 'Dental / optical preference', options: ['none', 'basic', 'full'] }, { key: 'preferred_network', label: 'Preferred network', options: ['restricted', 'standard', 'wide'] }, { key: 'preferred_provider', label: 'Preferred hospital or clinic (optional)' }],
   [{ key: 'payer', label: 'Who will pay?', options: ['self', 'employer', 'sponsor'] }, { key: 'annual_budget', label: 'Annual budget (AED)', type: 'number' }, { key: 'strict_budget', label: 'Is this a strict maximum?', type: 'boolean' }, { key: 'payment_frequency', label: 'Payment preference', options: ['annual', 'monthly'] }, { key: 'cost_sharing', label: 'Cost preference', options: ['lower_premium', 'lower_member_cost', 'balanced'] }, { key: 'company_name', label: 'Employer company name' }, { key: 'sponsor_name', label: 'Sponsor name' }, { key: 'sponsor_relationship', label: 'Sponsor relationship' }, { key: 'contribution_aed', label: 'Employer / sponsor contribution (AED)', type: 'number' }],
 ];
 export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () => void }) {
   const [tab, setTab] = useState(0); const [draft, setDraft] = useState<Record<string, any>>({}); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  const [useExtended, setUseExtended] = useState(false);
   const [extraction, setExtraction] = useState<any>(null);
   const facts = { ...profile.facts, ...draft };
   const missing: string[] = profile.readiness.missing;
+  const challenge = profile.readiness.mode === 'challenge' && !useExtended;
+  const groups = challenge ? challengeGroups : extendedGroups;
+  const registry = challenge ? challengeRegistry : extendedRegistry;
   function set(field: Field, value: string) {
     const parsed = value === '' ? null : field.type === 'number' ? Number(value) : field.type === 'boolean' ? value === 'true' : field.type === 'list' ? value.split(',').map(s => s.trim()).filter(Boolean) : value;
     setDraft(d => ({ ...d, [field.key]: parsed }));
@@ -36,10 +46,12 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
   }
   return <section className="profile-editor" aria-label="Editable insurance profile">
     <div className="section-heading"><div><span className="eyebrow">YOUR DETAILS</span><h2>One profile. Every step.</h2></div><span className="badge neutral">{missing.length ? `${missing.length} details to go` : 'Ready to compare'}</span></div>
+    {profile.readiness.mode === 'challenge' && <button type="button" className="quiet" onClick={() => { setUseExtended(value => !value); setTab(0); }}>{useExtended ? 'Use the short challenge profile' : 'Add detailed application information (optional)'}</button>}
     <div className="tabs" role="tablist" aria-label="Profile stages">{groups.map((name, i) => <button role="tab" aria-selected={tab === i} key={name} onClick={() => setTab(i)}>{i + 1}. {name}</button>)}</div>
-    {tab === 0 && <label className="upload-area"><UploadCloud size={22}/><span><strong>Autofill from an identity document</strong><small>Optional · JPG, PNG or PDF · 10 MB · up to 5 pages</small></span><input aria-label="Upload identity document" type="file" accept="image/jpeg,image/png,application/pdf" disabled={busy} onChange={e => { if (e.target.files?.[0]) void upload(e.target.files[0]); e.target.value = ''; }}/></label>}
+    {!challenge && tab === 0 && <label className="upload-area"><UploadCloud size={22}/><span><strong>Autofill from an identity document</strong><small>Optional · JPG, PNG or PDF · 10 MB · up to 5 pages</small></span><input aria-label="Upload identity document" type="file" accept="image/jpeg,image/png,application/pdf" disabled={busy} onChange={e => { if (e.target.files?.[0]) void upload(e.target.files[0]); e.target.value = ''; }}/></label>}
     {extraction && <div className="notice"><strong>Review extracted identity details</strong><p>{extraction.notice}</p>{Object.entries(extraction.fields).map(([key, value]) => <label className="field" key={key}>{key.replaceAll('_', ' ')}<input value={String(value)} onChange={e => setExtraction({ ...extraction, fields: { ...extraction.fields, [key]: e.target.value } })}/></label>)}<div className="actions"><button disabled={busy || !Object.keys(extraction.fields).length} onClick={accept}>Accept checked details</button><button className="secondary" onClick={() => setExtraction(null)}>Discard</button></div></div>}
     <div className="form-grid">{registry[tab].filter(f => {
+      if (challenge && f.key === 'conditions') return facts.diagnosed_conditions === 'yes';
       if (f.key === 'maximum_maternity_wait') return facts.maternity === true;
       if (f.key === 'immediate_chronic_cover') return facts.diagnosed_conditions === 'yes';
       if (f.key === 'company_name') return facts.payer === 'employer';
