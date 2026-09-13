@@ -306,6 +306,16 @@ def evaluate_servicing(plan, operation, ledger=None):
     kind = operation["kind"]
     if kind not in {"claim", "preauth", "reimbursement"}:
         raise ValueError("Only financial servicing operations can be evaluated.")
+    if operation.get("policy_active") is False:
+        return _result(
+            operation,
+            ledger,
+            "declined" if kind == "preauth" else "denied",
+            "policy_not_active",
+            0,
+            _amount_fils(operation),
+            ["The policy was not active at the reported treatment time."],
+        )
     if operation.get("geography") == "abroad":
         return _result(
             operation,

@@ -81,6 +81,26 @@ def test_wait_network_and_unknown_geography_are_distinct():
     assert abroad["plan_pays"] is None
 
 
+def test_inactive_policy_is_the_first_contractual_gate():
+    decision = evaluate_servicing(
+        plan("plan_a"),
+        {
+            "id": "INACTIVE-1",
+            "kind": "claim",
+            "policy_month": 1,
+            "benefit_class": "maternity",
+            "provider_tier": "out_of_network",
+            "geography": "abroad",
+            "billed_amount": 1000,
+            "policy_active": False,
+        },
+    )
+    assert decision["outcome"] == "denied"
+    assert decision["reason_code"] == "policy_not_active"
+    assert decision["member_pays"] == 1000
+    assert decision["ledger_after"] == empty_ledger()
+
+
 def test_replay_keeps_preauth_out_of_financial_ledger():
     operations = [
         {

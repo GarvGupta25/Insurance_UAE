@@ -851,9 +851,9 @@ def submit_servicing(
     policy = own(db, Policy, policy_id, user, lock=True)
 
     def action():
-        if policy.status != "demo_active":
-            raise HTTPException(422, "Servicing estimates require a verified sandbox policy.")
-        operation = {"id": body.event_id, **body.model_dump(exclude={"event_id"})}
+        if "plan" not in policy.snapshot:
+            raise HTTPException(422, "Servicing needs a policy with verified plan terms.")
+        operation = {"id": body.event_id, **body.model_dump(exclude={"event_id"}), "policy_active": policy.status == "demo_active"}
         decision, ledger = record_financial_event(db, policy, operation)
         db.add(
             Audit(
