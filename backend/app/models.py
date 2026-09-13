@@ -85,6 +85,7 @@ class Policy(Owned, Base):
         ForeignKey("applications.id"), unique=True, nullable=True
     )
     status: Mapped[str] = mapped_column(String(40), default="demo_active")
+    version: Mapped[int] = mapped_column(Integer, default=1)
     snapshot: Mapped[dict] = mapped_column(JSON)
 
 
@@ -140,6 +141,37 @@ class Audit(Owned, Base):
     action: Mapped[str] = mapped_column(String(60))
     subject_id: Mapped[str] = mapped_column(String(36))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ServicingEvent(Owned, Base):
+    """Append-only source and decision records for policy servicing."""
+
+    __tablename__ = "servicing_events"
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id"), index=True)
+    root_id: Mapped[str] = mapped_column(String(80), index=True)
+    record_type: Mapped[str] = mapped_column(String(24))
+    kind: Mapped[str] = mapped_column(String(24))
+    effective_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict] = mapped_column(JSON)
+    outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    plan_pays_fils: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    member_pays_fils: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    calculation: Mapped[list] = mapped_column(JSON, default=list)
+    ledger_before: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ledger_after: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    supersedes_id: Mapped[str | None] = mapped_column(ForeignKey("servicing_events.id"), nullable=True)
+    reviewer_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class LedgerProjection(Owned, Base):
+    """Disposable projection derived from effective covered servicing records."""
+
+    __tablename__ = "benefit_ledger_projections"
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id"), unique=True)
+    through_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    ledger: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class SourceSnapshot(Base):

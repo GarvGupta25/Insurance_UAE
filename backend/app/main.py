@@ -21,6 +21,7 @@ from .contracts import (
     MessageRequest,
     PatchRequest,
     PrepareRequest,
+    ServicingRequest,
     SimulateRequest,
     VerifyPayment,
     readiness,
@@ -40,11 +41,13 @@ from .models import (
     Quote,
     Receipt,
     Run,
+    ServicingEvent,
     SourceSnapshot,
     now,
 )
 from .payments import razorpay_request, settle, verify_order
 from .services import apply_facts, command, own, profile, visible_facts
+from .servicing import present_event, record_financial_event
 from .sources import registry
 from .voice import validate_audio
 
@@ -574,6 +577,11 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
     receipts = db.scalars(
         select(Receipt).where(Receipt.installment_id.in_([r.id for r in rows]), Receipt.owner_id == user.id)
     ).all()
+    servicing = db.scalars(
+        select(ServicingEvent)
+        .where(ServicingEvent.policy_id == policy.id, ServicingEvent.owner_id == user.id)
+        .order_by(ServicingEvent.sequence)
+    ).all()
     return {
         "id": policy.id,
         "status": policy.status,
@@ -595,7 +603,42 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         ],
         "paid_fils": sum(r.amount for r in receipts),
         "total_fils": sum(r.amount for r in rows),
+        "servicing": [present_event(event) for event in servicing],
     }
+
+
+@app.post("/api/policies/{policy_id}/servicing")
+def submit_servicing(
+    policy_id: str,
+    body: ServicingRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    policy = own(db, Policy, policy_id, user, lock=True)
+
+    def action():
+        if policy.status != "demo_active":
+            raise HTTPException(422, "Servicing estimates require a verified sandbox policy.")
+        operation = {"id": body.event_id, **body.model_dump(exclude={"event_id"})}
+        decision, ledger = record_financial_event(db, policy, operation)
+        db.add(
+            Audit(
+                owner_id=user.id,
+                action="servicing_decided",
+                subject_id=decision["id"],
+                details={"event_id": body.event_id, "outcome": decision["outcome"], "reason": decision["reason_code"]},
+            )
+        )
+        return {"decision": decision, "ledger": ledger}
+
+    return command(
+        db,
+        user,
+        idempotency_key,
+        {"action": "servicing", "policy_id": policy_id, **body.model_dump(mode="json")},
+        action,
+    )
 
 
 class ImportRequest(BaseModel):

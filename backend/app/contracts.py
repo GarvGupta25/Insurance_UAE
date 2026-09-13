@@ -148,3 +148,30 @@ class VerifyPayment(BaseModel):
     order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+
+
+class ServicingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: Annotated[str, Field(min_length=1, max_length=80)]
+    kind: Literal["claim", "preauth", "reimbursement"]
+    policy_month: Annotated[int, Field(ge=0, le=1200)]
+    benefit_class: Literal["general", "maternity", "chronic_preexisting", "dental_optical"]
+    provider_tier: Annotated[str, Field(min_length=1, max_length=80)]
+    setting: Literal["outpatient", "inpatient"] = "outpatient"
+    billed_amount: Annotated[int, Field(ge=0, le=100000000)] | None = None
+    estimated_amount: Annotated[int, Field(ge=0, le=100000000)] | None = None
+    amount_paid_by_member: Annotated[int, Field(ge=0, le=100000000)] | None = None
+    geography: Literal["UAE", "abroad"] = "UAE"
+    description: Annotated[str, Field(max_length=1000)] = ""
+
+    @model_validator(mode="after")
+    def amount_matches_kind(self):
+        expected = {
+            "claim": "billed_amount",
+            "preauth": "estimated_amount",
+            "reimbursement": "amount_paid_by_member",
+        }[self.kind]
+        if getattr(self, expected) is None:
+            raise ValueError(f"{expected.replace('_', ' ')} is required for this request.")
+        return self
