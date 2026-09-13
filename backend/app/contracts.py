@@ -185,6 +185,7 @@ class ServicingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: Annotated[str, Field(min_length=1, max_length=80)]
+    expected_policy_version: Annotated[int, Field(ge=1)] | None = None
     kind: Literal["claim", "preauth", "reimbursement"]
     policy_month: Annotated[int, Field(ge=0, le=1200)]
     benefit_class: Literal["general", "maternity", "chronic_preexisting", "dental_optical"]

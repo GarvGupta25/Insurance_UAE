@@ -61,6 +61,25 @@ def test_servicing_endpoint_persists_claim_and_keeps_forecast_out_of_ledger(fixt
     assert detail["servicing"][0]["ledger_after"]["annual_paid_fils"] == 0
 
 
+def test_servicing_preview_is_read_only_and_rejects_a_stale_confirmation(fixture_client):
+    client, _, _ = fixture_client
+    policy = create_policy(client)
+    body = {"event_id": "PREVIEW-X", "kind": "claim", "policy_month": 3, "benefit_class": "general", "provider_tier": "in_network_clinic", "billed_amount": 3000}
+    preview = client.post(f"/api/policies/{policy}/servicing/preview", json=body)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["decision"]["plan_pays"] == 1050
+    assert client.get(f"/api/policies/{policy}").json()["servicing"] == []
+
+    other = post(client, f"/api/policies/{policy}/servicing", {**body, "event_id": "OTHER-X"})
+    assert other.status_code == 200, other.text
+    stale = post(client, f"/api/policies/{policy}/servicing", {**body, "expected_policy_version": preview.json()["policy_version"]})
+    assert stale.status_code == 409
+    fresh = client.post(f"/api/policies/{policy}/servicing/preview", json=body).json()
+    submitted = post(client, f"/api/policies/{policy}/servicing", {**body, "expected_policy_version": fresh["policy_version"]})
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["decision"]["plan_pays_fils"] == fresh["decision"]["plan_pays_fils"]
+
+
 def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
     client, _, _ = fixture_client
     policy = create_policy(client, "plan_b")

@@ -840,6 +840,29 @@ def review_reassessment(
     return command(db, user, idempotency_key, {"action": "review_reassessment", "reassessment_id": reassessment_id, **body.model_dump()}, action)
 
 
+@app.post("/api/policies/{policy_id}/servicing/preview")
+def preview_servicing(
+    policy_id: str,
+    body: ServicingRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+):
+    policy = own(db, Policy, policy_id, user)
+    if "plan" not in policy.snapshot:
+        raise HTTPException(422, "Servicing needs a policy with verified plan terms.")
+    projection = db.scalar(select(LedgerProjection).where(LedgerProjection.policy_id == policy.id))
+    ledger = projection.ledger if projection else empty_ledger()
+    operation = {
+        "id": body.event_id,
+        **body.model_dump(exclude={"event_id", "expected_policy_version"}),
+        "policy_active": policy.status == "demo_active",
+    }
+    return {
+        "policy_version": policy.version,
+        "decision": evaluate_servicing(policy.snapshot["plan"], operation, ledger),
+    }
+
+
 @app.post("/api/policies/{policy_id}/servicing")
 def submit_servicing(
     policy_id: str,
@@ -853,7 +876,9 @@ def submit_servicing(
     def action():
         if "plan" not in policy.snapshot:
             raise HTTPException(422, "Servicing needs a policy with verified plan terms.")
-        operation = {"id": body.event_id, **body.model_dump(exclude={"event_id"}), "policy_active": policy.status == "demo_active"}
+        if body.expected_policy_version is not None and body.expected_policy_version != policy.version:
+            raise HTTPException(409, "Policy balances changed. Preview this request again before submitting.")
+        operation = {"id": body.event_id, **body.model_dump(exclude={"event_id", "expected_policy_version"}), "policy_active": policy.status == "demo_active"}
         decision, ledger = record_financial_event(db, policy, operation)
         db.add(
             Audit(
