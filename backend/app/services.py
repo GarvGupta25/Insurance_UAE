@@ -7,7 +7,7 @@ from sqlalchemy import select
 from .config import settings
 from .contracts import Facts
 from .domain import digest
-from .models import Audit, Command, Profile, ProfileVersion
+from .models import Audit, BrokerAssignment, Command, Profile, ProfileVersion
 
 SENSITIVE = {"passport_number", "emirates_id"}
 
@@ -19,6 +19,23 @@ def own(db, cls, ident, user, lock=False):
     row = db.scalar(query)
     if row is None:
         raise HTTPException(404, "This record is unavailable.")
+    return row
+
+
+def assigned(db, cls, ident, broker, lock=False):
+    """Find a member record only when the caller is that member's assigned broker."""
+    if broker.role != "broker":
+        raise HTTPException(403, "A broker account is required for this review.")
+    query = (
+        select(cls)
+        .join(BrokerAssignment, BrokerAssignment.member_id == cls.owner_id)
+        .where(cls.id == ident, BrokerAssignment.broker_id == broker.id)
+    )
+    if lock:
+        query = query.with_for_update()
+    row = db.scalar(query)
+    if row is None:
+        raise HTTPException(404, "This assigned case is unavailable.")
     return row
 
 

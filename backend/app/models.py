@@ -23,6 +23,15 @@ class Owned:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class BrokerAssignment(Base):
+    """Administrator-managed assignment from one member account to a broker account."""
+
+    __tablename__ = "broker_assignments"
+    member_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    broker_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Profile(Owned, Base):
     __tablename__ = "profiles"
     __table_args__ = (UniqueConstraint("owner_id"),)
