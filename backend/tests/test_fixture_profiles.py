@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+from conftest import as_assigned_broker
+
 from app.auth import User
 from app.contracts import Facts, readiness
 from app.domain import classify, compare, fixture_facts, source_data
@@ -51,7 +53,7 @@ def test_original_applicants_have_expected_deterministic_routing_and_recommendat
 
 
 def test_original_applicants_can_get_real_quotations_without_identity_or_payment_details(fixture_client):
-    client, owner, _ = fixture_client
+    client, owner, engine = fixture_client
     expected = {"P1": "plan_a", "P2": "plan_c", "P3": "plan_b", "P4": "plan_b", "P5": "plan_c"}
     for profile in source_data()["profiles"]:
         owner[0] = User(str(uuid4()), f"{profile['id'].lower()}@example.test")
@@ -74,6 +76,7 @@ def test_original_applicants_can_get_real_quotations_without_identity_or_payment
                 headers={"Idempotency-Key": str(uuid4())},
             )
             assert prepared.status_code == 200, prepared.text
-            broker_queue = client.get("/api/broker/recommendations").json()
+            with as_assigned_broker(owner, engine):
+                broker_queue = client.get("/api/broker/recommendations").json()
             assert broker_queue[0]["certainty"] == "tradeoff"
             assert "6-month waiting period" in broker_queue[0]["summary"]["decision_brief"]["main_uncertainty"]

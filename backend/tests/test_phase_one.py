@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
+from conftest import as_assigned_broker
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -51,15 +52,16 @@ def setup_case(client, **overrides):
     return case, quote
 
 
-def setup_policy(client, plan="plan_b"):
+def setup_policy(client, owner, engine, plan="plan_b"):
     case, quote = setup_case(client)
     application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
-    review = send(
-        client,
-        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
-        {"action": "approve", "note": "Synthetic broker review."},
-    )
+    with as_assigned_broker(owner, engine):
+        review = send(
+            client,
+            f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+            {"action": "approve", "note": "Synthetic broker review."},
+        )
     assert review.status_code == 200, review.text
     preview = client.get(f"/api/applications/{application}").json()
     body = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
@@ -69,8 +71,8 @@ def setup_policy(client, plan="plan_b"):
 
 
 def test_full_sandbox_flow_and_exact_schedule(fixture_client):
-    client, _, engine = fixture_client
-    policy_id, _, _ = setup_policy(client)
+    client, owner, engine = fixture_client
+    policy_id, _, _ = setup_policy(client, owner, engine)
     policy = client.get(f"/api/policies/{policy_id}").json()
     assert len(policy["instalments"]) == 12
     assert sum(row["amount"] for row in policy["instalments"]) == 890000
@@ -146,15 +148,16 @@ def test_stale_quote_and_confirmation_never_submit(fixture_client):
 
 
 def test_duplicate_application_is_one_policy(fixture_client):
-    client, _, engine = fixture_client
+    client, owner, engine = fixture_client
     _, quote = setup_case(client)
     a = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
     preview = client.get(f"/api/applications/{a}").json()
-    assert send(
-        client,
-        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
-        {"action": "approve", "note": "Synthetic broker review."},
-    ).status_code == 200
+    with as_assigned_broker(owner, engine):
+        assert send(
+            client,
+            f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+            {"action": "approve", "note": "Synthetic broker review."},
+        ).status_code == 200
     preview = client.get(f"/api/applications/{a}").json()
     key = str(uuid4())
     payload = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
@@ -166,17 +169,19 @@ def test_duplicate_application_is_one_policy(fixture_client):
 
 
 def test_broker_review_is_required_before_sandbox_submission(fixture_client):
-    client, _, _ = fixture_client
+    client, owner, engine = fixture_client
     _, quote = setup_case(client)
     application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
     body = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
     assert send(client, f"/api/applications/{application}/submit", body).status_code == 409
-    reviewed = send(
-        client,
-        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
-        {"action": "approve", "note": "Terms and tradeoffs reviewed."},
-    )
+    assert send(client, f"/api/broker/recommendations/{preview['recommendation_id']}/review", {"action": "approve"}).status_code == 403
+    with as_assigned_broker(owner, engine):
+        reviewed = send(
+            client,
+            f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+            {"action": "approve", "note": "Terms and tradeoffs reviewed."},
+        )
     assert reviewed.status_code == 200
     assert send(client, f"/api/applications/{application}/submit", body).status_code == 422
     new_preview = client.get(f"/api/applications/{application}").json()
@@ -253,8 +258,8 @@ def test_pdf_is_readable_and_identity_extraction_provisional(fixture_client):
 
 
 def test_failed_payment_keeps_balance_and_receipts_empty(fixture_client):
-    client, _, _ = fixture_client
-    policy_id, _, _ = setup_policy(client)
+    client, owner, engine = fixture_client
+    policy_id, _, _ = setup_policy(client, owner, engine)
     policy = client.get(f"/api/policies/{policy_id}").json()
     order = send(client, f"/api/instalments/{policy['instalments'][0]['id']}/payment-order").json()
     assert (
@@ -265,8 +270,8 @@ def test_failed_payment_keeps_balance_and_receipts_empty(fixture_client):
 
 
 def test_profile_history_and_immutable_policy_snapshot(fixture_client):
-    client, _, engine = fixture_client
-    policy_id, _, _ = setup_policy(client)
+    client, owner, engine = fixture_client
+    policy_id, _, _ = setup_policy(client, owner, engine)
     before = client.get(f"/api/policies/{policy_id}").json()["plan"]
     assert (
         client.patch(

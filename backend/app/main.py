@@ -14,7 +14,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from .auth import User, current_user
+from .auth import User, current_user, require_broker
 from .config import settings
 from .contracts import (
     AppealRequest,
@@ -47,6 +47,7 @@ from .domain import (
 from .models import (
     Application,
     Audit,
+    BrokerAssignment,
     Case,
     Document,
     Installment,
@@ -65,7 +66,7 @@ from .models import (
     now,
 )
 from .payments import razorpay_request, settle, verify_order
-from .services import apply_facts, command, own, profile, visible_facts
+from .services import apply_facts, assigned, command, own, profile, visible_facts
 from .servicing import present_event, rebuild_projection, record_financial_event
 from .sources import registry
 from .voice import validate_audio
@@ -541,10 +542,11 @@ def application_detail(
 
 
 @app.get("/api/broker/recommendations")
-def broker_recommendations(user: User = Depends(current_user), db: Session = Depends(session)):
+def broker_recommendations(user: User = Depends(require_broker), db: Session = Depends(session)):
     rows = db.scalars(
         select(Recommendation)
-        .where(Recommendation.owner_id == user.id)
+        .join(BrokerAssignment, BrokerAssignment.member_id == Recommendation.owner_id)
+        .where(BrokerAssignment.broker_id == user.id)
         .order_by(Recommendation.created_at.desc())
     ).all()
     return [
@@ -566,16 +568,16 @@ def broker_recommendations(user: User = Depends(current_user), db: Session = Dep
 def review_recommendation(
     recommendation_id: str,
     body: BrokerRecommendationReview,
-    user: User = Depends(current_user),
+    user: User = Depends(require_broker),
     db: Session = Depends(session),
     idempotency_key: str = Header(),
 ):
-    recommendation = own(db, Recommendation, recommendation_id, user, lock=True)
+    recommendation = assigned(db, Recommendation, recommendation_id, user, lock=True)
 
     def action():
         if recommendation.status != "pending_review":
             raise HTTPException(409, "This recommendation has already been reviewed.")
-        quote = own(db, Quote, recommendation.quote_id, user)
+        quote = assigned(db, Quote, recommendation.quote_id, user)
         selected_plan_id = body.selected_plan_id or recommendation.proposed_plan_id
         selected = next((item for item in quote.snapshot["items"] if item["plan"]["id"] == selected_plan_id), None)
         if not selected or selected["status"] != "supported":
@@ -584,7 +586,7 @@ def review_recommendation(
         recommendation.proposed_plan_id = selected_plan_id
         recommendation.status = "approved"
         application = db.scalar(
-            select(Application).where(Application.recommendation_id == recommendation.id).with_for_update()
+            select(Application).where(Application.recommendation_id == recommendation.id, Application.owner_id == recommendation.owner_id).with_for_update()
         )
         if not application:
             raise HTTPException(409, "The prepared application is unavailable.")
@@ -793,10 +795,11 @@ def reassess_policy(
 
 
 @app.get("/api/broker/reassessments")
-def broker_reassessments(user: User = Depends(current_user), db: Session = Depends(session)):
+def broker_reassessments(user: User = Depends(require_broker), db: Session = Depends(session)):
     rows = db.scalars(
         select(PolicyReassessment)
-        .where(PolicyReassessment.owner_id == user.id)
+        .join(BrokerAssignment, BrokerAssignment.member_id == PolicyReassessment.owner_id)
+        .where(BrokerAssignment.broker_id == user.id)
         .order_by(PolicyReassessment.created_at.desc())
     ).all()
     return [
@@ -817,11 +820,11 @@ def broker_reassessments(user: User = Depends(current_user), db: Session = Depen
 def review_reassessment(
     reassessment_id: str,
     body: BrokerReassessmentReview,
-    user: User = Depends(current_user),
+    user: User = Depends(require_broker),
     db: Session = Depends(session),
     idempotency_key: str = Header(),
 ):
-    assessment = own(db, PolicyReassessment, reassessment_id, user, lock=True)
+    assessment = assigned(db, PolicyReassessment, reassessment_id, user, lock=True)
 
     def action():
         if assessment.status != "pending_review":
@@ -952,10 +955,11 @@ def submit_appeal(
 
 
 @app.get("/api/broker/appeals")
-def broker_appeals(user: User = Depends(current_user), db: Session = Depends(session)):
+def broker_appeals(user: User = Depends(require_broker), db: Session = Depends(session)):
     appeals = db.scalars(
         select(ServicingEvent)
-        .where(ServicingEvent.owner_id == user.id, ServicingEvent.record_type == "appeal")
+        .join(BrokerAssignment, BrokerAssignment.member_id == ServicingEvent.owner_id)
+        .where(BrokerAssignment.broker_id == user.id, ServicingEvent.record_type == "appeal")
         .order_by(ServicingEvent.created_at.desc())
     ).all()
     rows = []
@@ -981,11 +985,11 @@ def broker_appeals(user: User = Depends(current_user), db: Session = Depends(ses
 def review_appeal(
     appeal_id: str,
     body: BrokerAppealReview,
-    user: User = Depends(current_user),
+    user: User = Depends(require_broker),
     db: Session = Depends(session),
     idempotency_key: str = Header(),
 ):
-    appeal = own(db, ServicingEvent, appeal_id, user, lock=True)
+    appeal = assigned(db, ServicingEvent, appeal_id, user, lock=True)
 
     def action():
         if appeal.record_type != "appeal":
@@ -993,12 +997,12 @@ def review_appeal(
         already_reviewed = db.scalar(select(ServicingEvent).where(ServicingEvent.record_type == "appeal_review", ServicingEvent.supersedes_id == appeal.id))
         if already_reviewed:
             raise HTTPException(409, "This appeal has already been reviewed.")
-        contested = db.scalar(select(ServicingEvent).where(ServicingEvent.id == appeal.supersedes_id))
+        contested = db.scalar(select(ServicingEvent).where(ServicingEvent.id == appeal.supersedes_id, ServicingEvent.owner_id == appeal.owner_id))
         if not contested or contested.record_type != "decision":
             raise HTTPException(409, "The original servicing decision is unavailable.")
-        policy = own(db, Policy, appeal.policy_id, user, lock=True)
+        policy = assigned(db, Policy, appeal.policy_id, user, lock=True)
         review = ServicingEvent(
-            owner_id=user.id,
+            owner_id=appeal.owner_id,
             policy_id=policy.id,
             root_id=appeal.root_id,
             record_type="appeal_review",
@@ -1026,7 +1030,7 @@ def review_appeal(
             if provisional["outcome"] == contested.outcome and provisional["reason_code"] == contested.reason_code:
                 raise HTTPException(422, "The proposed correction does not change the contested decision.")
             revision = ServicingEvent(
-                owner_id=user.id,
+                owner_id=appeal.owner_id,
                 policy_id=policy.id,
                 root_id=contested.root_id,
                 record_type="revision",

@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from uuid import uuid4
 
+from conftest import as_assigned_broker
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,20 @@ def post(client, path, body):
     return client.post(path, json=body, headers={"Idempotency-Key": str(uuid4())})
 
 
-def create_policy(client, plan_id="plan_a"):
+def broker_post(fixture_client, path, body):
+    client, owner, engine = fixture_client
+    with as_assigned_broker(owner, engine):
+        return post(client, path, body)
+
+
+def broker_get(fixture_client, path):
+    client, owner, engine = fixture_client
+    with as_assigned_broker(owner, engine):
+        return client.get(path)
+
+
+def create_policy(fixture_client, plan_id="plan_a"):
+    client, _, _ = fixture_client
     profile = client.get("/api/me/profile").json()
     facts = {
         "legal_name": "Amina Example",
@@ -36,8 +50,8 @@ def create_policy(client, plan_id="plan_a"):
     quote = post(client, f"/api/cases/{case}/quotes", {}).json()["id"]
     application = post(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan_id}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
-    assert post(
-        client,
+    assert broker_post(
+        fixture_client,
         f"/api/broker/recommendations/{preview['recommendation_id']}/review",
         {"action": "approve", "note": "Synthetic broker review."},
     ).status_code == 200
@@ -47,7 +61,7 @@ def create_policy(client, plan_id="plan_a"):
 
 def test_servicing_endpoint_persists_claim_and_keeps_forecast_out_of_ledger(fixture_client):
     client, _, _ = fixture_client
-    policy = create_policy(client)
+    policy = create_policy(fixture_client)
     preauth = post(
         client,
         f"/api/policies/{policy}/servicing",
@@ -69,7 +83,7 @@ def test_servicing_endpoint_persists_claim_and_keeps_forecast_out_of_ledger(fixt
 
 def test_servicing_preview_is_read_only_and_rejects_a_stale_confirmation(fixture_client):
     client, _, _ = fixture_client
-    policy = create_policy(client)
+    policy = create_policy(fixture_client)
     body = {"event_id": "PREVIEW-X", "kind": "claim", "policy_month": 3, "benefit_class": "general", "provider_tier": "in_network_clinic", "billed_amount": 3000}
     preview = client.post(f"/api/policies/{policy}/servicing/preview", json=body)
     assert preview.status_code == 200, preview.text
@@ -88,7 +102,7 @@ def test_servicing_preview_is_read_only_and_rejects_a_stale_confirmation(fixture
 
 def test_late_earlier_claim_appends_revised_effective_decisions(fixture_client):
     client, _, _ = fixture_client
-    policy = create_policy(client, "plan_b")
+    policy = create_policy(fixture_client, "plan_b")
     body = {"kind": "claim", "benefit_class": "general", "provider_tier": "in_network_clinic", "billed_amount": 1000}
     later = post(client, f"/api/policies/{policy}/servicing", {**body, "event_id": "LATER", "policy_month": 8})
     assert later.status_code == 200, later.text
@@ -110,7 +124,7 @@ def test_late_earlier_claim_appends_revised_effective_decisions(fixture_client):
 
 def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
     client, _, _ = fixture_client
-    policy = create_policy(client, "plan_b")
+    policy = create_policy(fixture_client, "plan_b")
     denied = post(
         client,
         f"/api/policies/{policy}/servicing",
@@ -125,10 +139,10 @@ def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
     )
     assert appeal.status_code == 200
     assert appeal.json()["status"] == "pending_review"
-    queue = client.get("/api/broker/appeals").json()
+    queue = broker_get(fixture_client, "/api/broker/appeals").json()
     assert queue[0]["appeal"]["contested_event_id"] == "WAIT-1"
-    reviewed = post(
-        client,
+    reviewed = broker_post(
+        fixture_client,
         f"/api/broker/appeals/{appeal.json()['appeal']['id']}/review",
         {"action": "overturn", "note": "Evidence confirms month seven.", "corrected_policy_month": 7},
     )
@@ -141,13 +155,13 @@ def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
 
 def test_appeal_overturn_appends_downstream_revision_without_changing_original(fixture_client):
     client, _, _ = fixture_client
-    policy = create_policy(client, "plan_b")
+    policy = create_policy(fixture_client, "plan_b")
     denied = post(client, f"/api/policies/{policy}/servicing", {"event_id": "EARLY-WAIT", "kind": "claim", "policy_month": 4, "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "billed_amount": 2800})
     assert denied.json()["decision"]["reason_code"] == "waiting_period_not_elapsed"
     later = post(client, f"/api/policies/{policy}/servicing", {"event_id": "LATER-CARE", "kind": "claim", "policy_month": 7, "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "billed_amount": 2600})
     assert later.json()["decision"]["plan_pays_fils"] == 168000
     appeal = post(client, f"/api/policies/{policy}/appeals", {"appeal_id": "APPEAL-LATE", "contested_event_id": "EARLY-WAIT", "statement": "The treatment date was recorded incorrectly.", "evidence": ["Verified treatment-date record"]})
-    reviewed = post(client, f"/api/broker/appeals/{appeal.json()['appeal']['id']}/review", {"action": "overturn", "note": "Reviewed the treatment-date record.", "corrected_policy_month": 6})
+    reviewed = broker_post(fixture_client, f"/api/broker/appeals/{appeal.json()['appeal']['id']}/review", {"action": "overturn", "note": "Reviewed the treatment-date record.", "corrected_policy_month": 6})
     assert reviewed.status_code == 200, reviewed.text
     assert reviewed.json()["effective_decision"]["plan_pays_fils"] == 184000
     assert reviewed.json()["ledger"]["annual_paid_fils"] == 392000
@@ -161,7 +175,7 @@ def test_appeal_overturn_appends_downstream_revision_without_changing_original(f
 
 def test_app2_provider_evidence_preserves_original_input_and_changes_preauth_forecast(fixture_client):
     client, _, engine = fixture_client
-    policy = create_policy(client, "plan_b")
+    policy = create_policy(fixture_client, "plan_b")
     events = {event["id"]: event for event in source_data()["servicing_events"]}
     claim = events["CLM-4"]
     denied = post(client, f"/api/policies/{policy}/servicing", {
@@ -175,7 +189,7 @@ def test_app2_provider_evidence_preserves_original_input_and_changes_preauth_for
         "appeal_id": "APP-2", "contested_event_id": "CLM-4",
         "statement": events["APP-2"]["applicant_claim"], "evidence": [evidence],
     }).json()
-    review = post(client, f"/api/broker/appeals/{appeal['appeal']['id']}/review", {
+    review = broker_post(fixture_client, f"/api/broker/appeals/{appeal['appeal']['id']}/review", {
         "action": "overturn", "note": "Registration supports independent standard-network membership.",
         "verified_network_membership": {
             "provider_name": "Gulf Physiotherapy Centre LLC",
@@ -203,13 +217,13 @@ def test_app2_provider_evidence_preserves_original_input_and_changes_preauth_for
 
 def test_reassessment_requires_and_records_a_broker_review(fixture_client):
     client, _, _ = fixture_client
-    policy = create_policy(client)
+    policy = create_policy(fixture_client)
     reassessment = post(client, f"/api/policies/{policy}/reassess", {})
     assert reassessment.status_code == 200
-    queue = client.get("/api/broker/reassessments").json()
+    queue = broker_get(fixture_client, "/api/broker/reassessments").json()
     assert queue[0]["status"] == "pending_review"
-    review = post(
-        client,
+    review = broker_post(
+        fixture_client,
         f"/api/broker/reassessments/{queue[0]['id']}/review",
         {"action": "retain", "note": "Current fictional plan remains supported by saved facts."},
     )
