@@ -47,6 +47,7 @@ from .models import (
     Case,
     Document,
     Installment,
+    LedgerProjection,
     Message,
     PaymentOrder,
     Policy,
@@ -707,6 +708,7 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         .where(ServicingEvent.policy_id == policy.id, ServicingEvent.owner_id == user.id)
         .order_by(ServicingEvent.sequence)
     ).all()
+    servicing_ledger = db.scalar(select(LedgerProjection).where(LedgerProjection.policy_id == policy.id))
     return {
         "id": policy.id,
         "status": policy.status,
@@ -729,6 +731,7 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         "paid_fils": sum(r.amount for r in receipts),
         "total_fils": sum(r.amount for r in rows),
         "servicing": [present_event(event) for event in servicing],
+        "servicing_ledger": servicing_ledger.ledger if servicing_ledger else empty_ledger(),
     }
 
 
