@@ -12,6 +12,9 @@ It never presents a fictional plan as real cover. A quote is indicative; a sandb
 - Versioned fictional catalogue, deterministic matching, a downloadable PDF quotation and visible waiting-period/network tradeoffs.
 - Two application mappings, snapshot hashing, explicit declaration confirmation and an in-app carrier sandbox.
 - Portfolio, frozen policy terms, a monthly/annual simulated schedule, idempotent local payments and an optional Razorpay test adapter.
+- Broker review before a prepared application can be confirmed, including the documented fit brief and supported-plan edits.
+- Deterministic pre-authorisation, claim and reimbursement servicing with an append-only history and rebuildable benefit ledger.
+- Member appeal submission, broker uphold/overturn decisions, corrected effective revisions and history-aware policy-fit reassessments.
 - Fictional provider list/map, source-labelled updates, keyboard-accessible responsive screens and shared voice components.
 - An approved official-page registry and bounded source refresh for independent research; those unreviewed pages never set sandbox premiums or policy terms.
 - Voice capture is short push-to-talk, with an editable transcript before it becomes a message. Optional read-aloud uses the browser voice. Audio is only sent to Groq when `GROQ_API_KEY` is configured and is not stored by Helm.

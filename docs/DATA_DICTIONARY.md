@@ -20,4 +20,4 @@ The Plan A/B/C object is retained exactly as supplied in `hackathon_data.json`; 
 
 `synthetic_demo`, `indicative`, `demo_active` and `unverified_import` are distinct modes. A current screen must never make a local simulation look like an issued policy, a real payment or insurer-confirmed provider membership.
 
-The initial Phase 1 data model deliberately does not contain the benefit ledger, servicing events, appeal decisions or reassessment output. Those belong to the revised plan's later servicing phase and must use an append-only/replayable model when introduced.
+Servicing events are append-only source, decision, appeal, review and revision records. `benefit_ledger_projections` is a disposable derived projection rebuilt from the effective decision history. Policy reassessments are informational snapshots of current profile fit and effective event history; they never change a policy automatically.

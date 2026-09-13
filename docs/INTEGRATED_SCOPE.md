@@ -2,7 +2,7 @@
 
 The application now follows the user's combined direction rather than treating either historic plan as exclusive.
 
-The existing Phase 1 account, conversational profile, document extraction, quotation, Easy Fill, sandbox policy, payment, provider map and policy portfolio remain in scope. The next delivery increments add Version 3's broker review, deterministic servicing, immutable history, appeal review and fit reassessment. Voice remains a shared input/output channel across both surfaces.
+The existing Phase 1 account, conversational profile, document extraction, quotation, Easy Fill, sandbox policy, payment, provider map and policy portfolio remain in scope. The integrated build now also includes Version 3's broker review, deterministic servicing, immutable history, appeal review and history-aware fit reassessment. Voice remains a shared input/output channel across both surfaces.
 
 Where the plans conflict, these rules apply:
 
