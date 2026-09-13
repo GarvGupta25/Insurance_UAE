@@ -1,6 +1,12 @@
 from datetime import date, timedelta
 from uuid import uuid4
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.domain import source_data
+from app.models import ServicingEvent
+
 
 def post(client, path, body):
     return client.post(path, json=body, headers={"Idempotency-Key": str(uuid4())})
@@ -151,6 +157,48 @@ def test_appeal_overturn_appends_downstream_revision_without_changing_original(f
         ("decision", 168000), ("revision", 208000)
     ]
     assert later_rows[1]["supersedes_id"] == later_rows[0]["id"]
+
+
+def test_app2_provider_evidence_preserves_original_input_and_changes_preauth_forecast(fixture_client):
+    client, _, engine = fixture_client
+    policy = create_policy(client, "plan_b")
+    events = {event["id"]: event for event in source_data()["servicing_events"]}
+    claim = events["CLM-4"]
+    denied = post(client, f"/api/policies/{policy}/servicing", {
+        "event_id": claim["id"], "kind": "claim", "policy_month": claim["policy_month"],
+        "benefit_class": claim["benefit_class"], "provider_tier": claim["provider_tier"],
+        "setting": claim["setting"], "billed_amount": claim["billed_amount"],
+    })
+    assert denied.json()["decision"]["reason_code"] == "provider_out_of_network"
+    evidence = events["APP-2"]["evidence_attached"][0]
+    appeal = post(client, f"/api/policies/{policy}/appeals", {
+        "appeal_id": "APP-2", "contested_event_id": "CLM-4",
+        "statement": events["APP-2"]["applicant_claim"], "evidence": [evidence],
+    }).json()
+    review = post(client, f"/api/broker/appeals/{appeal['appeal']['id']}/review", {
+        "action": "overturn", "note": "Registration supports independent standard-network membership.",
+        "verified_network_membership": {
+            "provider_name": "Gulf Physiotherapy Centre LLC",
+            "network_tier": "standard", "evidence_reference": evidence,
+        },
+    })
+    assert review.status_code == 200, review.text
+    assert review.json()["effective_decision"]["plan_pays_fils"] == 440000
+    assert review.json()["ledger"]["deductible_met_fils"] == 50000
+    with Session(engine) as db:
+        original = db.scalar(select(ServicingEvent).where(ServicingEvent.policy_id == policy, ServicingEvent.root_id == "CLM-4", ServicingEvent.record_type == "decision"))
+        revision = db.scalar(select(ServicingEvent).where(ServicingEvent.policy_id == policy, ServicingEvent.root_id == "CLM-4", ServicingEvent.record_type == "revision"))
+        assert original.payload["provider_tier"] == "top_tier_private_hospital"
+        assert revision.payload["provider_tier"] == "top_tier_private_hospital"
+        assert revision.payload["verified_network_membership"]["evidence_reference"] == evidence
+    pre = events["PRE-2"]
+    forecast = client.post(f"/api/policies/{policy}/servicing/preview", json={
+        "event_id": pre["id"], "kind": "preauth", "policy_month": pre["policy_month"],
+        "benefit_class": pre["benefit_class"], "provider_tier": pre["provider_tier"],
+        "setting": pre["setting"], "estimated_amount": pre["estimated_amount"],
+    })
+    assert forecast.status_code == 200, forecast.text
+    assert forecast.json()["decision"]["plan_pays_fils"] == 2240000
 
 
 def test_reassessment_requires_and_records_a_broker_review(fixture_client):

@@ -101,6 +101,26 @@ def test_inactive_policy_is_the_first_contractual_gate():
     assert decision["ledger_after"] == empty_ledger()
 
 
+def test_verified_membership_can_correct_network_gate_without_rewriting_original_tier():
+    request = {
+        "id": "CLM-4",
+        "kind": "claim",
+        "policy_month": 7,
+        "benefit_class": "general",
+        "provider_tier": "top_tier_private_hospital",
+        "billed_amount": 6000,
+    }
+    original = evaluate_servicing(plan("plan_b"), request)
+    assert original["reason_code"] == "provider_out_of_network"
+    accepted = evaluate_servicing(plan("plan_b"), {**request, "verified_network_membership": {
+        "provider_name": "Gulf Physiotherapy Centre LLC",
+        "network_tier": "standard",
+        "evidence_reference": "Independent provider registration",
+    }})
+    assert accepted["plan_pays"] == 4400
+    assert request["provider_tier"] == "top_tier_private_hospital"
+
+
 def test_replay_keeps_preauth_out_of_financial_ledger():
     operations = [
         {

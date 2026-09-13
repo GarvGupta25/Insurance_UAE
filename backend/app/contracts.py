@@ -234,6 +234,14 @@ class AppealRequest(BaseModel):
     evidence: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(default_factory=list, max_length=10)
 
 
+class VerifiedNetworkMembership(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider_name: Annotated[str, Field(min_length=1, max_length=250)]
+    network_tier: Literal["restricted", "standard", "wide"]
+    evidence_reference: Annotated[str, Field(min_length=1, max_length=500)]
+
+
 class BrokerAppealReview(BaseModel):
     """A broker can uphold a decision or issue a corrected effective revision."""
 
@@ -242,12 +250,14 @@ class BrokerAppealReview(BaseModel):
     action: Literal["uphold", "overturn"]
     note: Annotated[str, Field(min_length=1, max_length=2000)]
     corrected_policy_month: Annotated[int, Field(ge=0, le=1200)] | None = None
-    corrected_provider_tier: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    verified_network_membership: VerifiedNetworkMembership | None = None
 
     @model_validator(mode="after")
     def correction_for_overturn(self):
-        if self.action == "overturn" and self.corrected_policy_month is None and not self.corrected_provider_tier:
-            raise ValueError("An overturned decision needs a corrected policy month or provider tier.")
+        if self.action == "overturn" and self.corrected_policy_month is None and not self.verified_network_membership:
+            raise ValueError("An overturned decision needs a corrected policy month or verified network membership.")
+        if self.action == "uphold" and (self.corrected_policy_month is not None or self.verified_network_membership):
+            raise ValueError("An upheld decision cannot include a correction.")
         return self
 
 

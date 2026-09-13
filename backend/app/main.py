@@ -1015,9 +1015,16 @@ def review_appeal(
             corrected = {**contested.payload}
             if body.corrected_policy_month is not None:
                 corrected["policy_month"] = body.corrected_policy_month
-            if body.corrected_provider_tier:
-                corrected["provider_tier"] = body.corrected_provider_tier
+            if body.verified_network_membership:
+                if contested.reason_code != "provider_out_of_network":
+                    raise HTTPException(422, "Network evidence can only correct a recorded network denial.")
+                membership = body.verified_network_membership
+                if membership.evidence_reference not in appeal.payload.get("evidence", []):
+                    raise HTTPException(422, "Select an evidence item attached to this appeal.")
+                corrected["verified_network_membership"] = membership.model_dump()
             provisional = evaluate_servicing(policy.snapshot["plan"], corrected, empty_ledger())
+            if provisional["outcome"] == contested.outcome and provisional["reason_code"] == contested.reason_code:
+                raise HTTPException(422, "The proposed correction does not change the contested decision.")
             revision = ServicingEvent(
                 owner_id=user.id,
                 policy_id=policy.id,

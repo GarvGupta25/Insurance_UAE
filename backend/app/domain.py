@@ -336,7 +336,15 @@ def evaluate_servicing(plan, operation, ledger=None):
         return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "waiting_period_not_elapsed", 0, amount_fils, ["The applicable waiting period has not elapsed."])
 
     allowed = source_data()["provider_tiers"].get(plan["network"], [])
-    if operation.get("provider_tier") not in allowed:
+    membership = operation.get("verified_network_membership")
+    network_rank = {"restricted": 0, "standard": 1, "wide": 2}
+    membership_admitted = (
+        isinstance(membership, dict)
+        and membership.get("network_tier") in network_rank
+        and network_rank[membership["network_tier"]] <= network_rank[plan["network"]]
+        and bool(membership.get("evidence_reference"))
+    )
+    if operation.get("provider_tier") not in allowed and not membership_admitted:
         return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "provider_out_of_network", 0, amount_fils, ["The provider tier is outside this plan's network."])
 
     sublimit_fils = money(term["limit"]) if term.get("limit") is not None else None
