@@ -6,7 +6,7 @@ def post(client, path, body):
     return client.post(path, json=body, headers={"Idempotency-Key": str(uuid4())})
 
 
-def create_policy(client):
+def create_policy(client, plan_id="plan_a"):
     profile = client.get("/api/me/profile").json()
     facts = {
         "legal_name": "Amina Example",
@@ -28,7 +28,7 @@ def create_policy(client):
     assert client.patch("/api/me/profile", json={"expected_version": profile["version"], "changes": facts}).status_code == 200
     case = post(client, "/api/cases", {}).json()["id"]
     quote = post(client, f"/api/cases/{case}/quotes", {}).json()["id"]
-    application = post(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    application = post(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan_id}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
     assert post(
         client,
@@ -59,3 +59,34 @@ def test_servicing_endpoint_persists_claim_and_keeps_forecast_out_of_ledger(fixt
     detail = client.get(f"/api/policies/{policy}").json()
     assert [item["event_id"] for item in detail["servicing"]] == ["PRE-X", "CLM-X"]
     assert detail["servicing"][0]["ledger_after"]["annual_paid_fils"] == 0
+
+
+def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
+    client, _, _ = fixture_client
+    policy = create_policy(client, "plan_b")
+    denied = post(
+        client,
+        f"/api/policies/{policy}/servicing",
+        {"event_id": "WAIT-1", "kind": "claim", "policy_month": 1, "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "billed_amount": 3000},
+    )
+    assert denied.status_code == 200
+    assert denied.json()["decision"]["reason_code"] == "waiting_period_not_elapsed"
+    appeal = post(
+        client,
+        f"/api/policies/{policy}/appeals",
+        {"appeal_id": "APL-1", "contested_event_id": "WAIT-1", "statement": "The treatment happened after the waiting period.", "evidence": ["carrier confirmation"]},
+    )
+    assert appeal.status_code == 200
+    assert appeal.json()["status"] == "pending_review"
+    queue = client.get("/api/broker/appeals").json()
+    assert queue[0]["appeal"]["contested_event_id"] == "WAIT-1"
+    reviewed = post(
+        client,
+        f"/api/broker/appeals/{appeal.json()['appeal']['id']}/review",
+        {"action": "overturn", "note": "Evidence confirms month seven.", "corrected_policy_month": 7},
+    )
+    assert reviewed.status_code == 200
+    assert reviewed.json()["effective_decision"]["outcome"] == "covered"
+    assert reviewed.json()["ledger"]["annual_paid_fils"] > 0
+    detail = client.get(f"/api/policies/{policy}").json()
+    assert [item["record_type"] for item in detail["servicing"]] == ["decision", "appeal", "appeal_review", "revision"]

@@ -189,3 +189,31 @@ class BrokerRecommendationReview(BaseModel):
         if self.action == "edit" and not self.selected_plan_id:
             raise ValueError("Choose the plan to recommend.")
         return self
+
+
+class AppealRequest(BaseModel):
+    """Member appeal against a persisted servicing decision; source records stay immutable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    appeal_id: Annotated[str, Field(min_length=1, max_length=80)]
+    contested_event_id: Annotated[str, Field(min_length=1, max_length=80)]
+    statement: Annotated[str, Field(min_length=1, max_length=2000)]
+    evidence: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(default_factory=list, max_length=10)
+
+
+class BrokerAppealReview(BaseModel):
+    """A broker can uphold a decision or issue a corrected effective revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["uphold", "overturn"]
+    note: Annotated[str, Field(min_length=1, max_length=2000)]
+    corrected_policy_month: Annotated[int, Field(ge=0, le=1200)] | None = None
+    corrected_provider_tier: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+
+    @model_validator(mode="after")
+    def correction_for_overturn(self):
+        if self.action == "overturn" and self.corrected_policy_month is None and not self.corrected_provider_tier:
+            raise ValueError("An overturned decision needs a corrected policy month or provider tier.")
+        return self

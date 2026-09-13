@@ -23,6 +23,7 @@ def present_event(record):
     return {
         "id": record.id,
         "event_id": record.root_id,
+        "record_type": record.record_type,
         "kind": record.kind,
         "policy_month": record.effective_month,
         "outcome": record.outcome,
@@ -32,8 +33,41 @@ def present_event(record):
         "calculation": record.calculation,
         "ledger_before": record.ledger_before,
         "ledger_after": record.ledger_after,
+        "supersedes_id": record.supersedes_id,
+        "reviewer_action": record.reviewer_action,
         "recorded_at": record.created_at.isoformat(),
     }
+
+
+def rebuild_projection(db, policy):
+    """Replay current effective financial decisions without modifying the audit trail."""
+    projection = _projection(db, policy)
+    rows = db.scalars(
+        select(ServicingEvent)
+        .where(
+            ServicingEvent.policy_id == policy.id,
+            ServicingEvent.record_type.in_(["decision", "revision"]),
+        )
+        .order_by(ServicingEvent.sequence)
+    ).all()
+    latest_by_root = {}
+    original_sequence = {}
+    for row in rows:
+        latest_by_root[row.root_id] = row
+        original_sequence.setdefault(row.root_id, row.sequence)
+    effective = sorted(
+        latest_by_root.values(),
+        key=lambda row: (row.effective_month if row.effective_month is not None else 1201, original_sequence[row.root_id]),
+    )
+    ledger, decisions = empty_ledger(), {}
+    for row in effective:
+        decision = evaluate_servicing(policy.snapshot["plan"], row.payload, ledger)
+        decisions[row.root_id] = decision
+        if row.kind != "preauth" and decision["outcome"] == "covered":
+            ledger = decision["ledger_after"]
+    projection.ledger = ledger
+    projection.through_sequence = max((row.sequence for row in rows), default=0)
+    return ledger, decisions
 
 
 def record_financial_event(db, policy, request):
@@ -68,8 +102,7 @@ def record_financial_event(db, policy, request):
     )
     db.add(record)
     db.flush()
+    ledger, _ = rebuild_projection(db, policy)
     if request["kind"] != "preauth" and decision["outcome"] == "covered":
-        projection.ledger = decision["ledger_after"]
-        projection.through_sequence = record.sequence
         policy.version += 1
-    return present_event(record), projection.ledger
+    return present_event(record), ledger

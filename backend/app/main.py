@@ -10,13 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .auth import User, current_user
 from .config import settings
 from .contracts import (
+    AppealRequest,
+    BrokerAppealReview,
     BrokerRecommendationReview,
     ConfirmRequest,
     MessageRequest,
@@ -29,7 +31,16 @@ from .contracts import (
 )
 from .db import session
 from .documents import extract_identity, quotation_pdf
-from .domain import compare, digest, installments, map_application, money, plans
+from .domain import (
+    compare,
+    digest,
+    empty_ledger,
+    evaluate_servicing,
+    installments,
+    map_application,
+    money,
+    plans,
+)
 from .models import (
     Application,
     Audit,
@@ -50,7 +61,7 @@ from .models import (
 )
 from .payments import razorpay_request, settle, verify_order
 from .services import apply_facts, command, own, profile, visible_facts
-from .servicing import present_event, record_financial_event
+from .servicing import present_event, rebuild_projection, record_financial_event
 from .sources import registry
 from .voice import validate_audio
 
@@ -753,6 +764,170 @@ def submit_servicing(
         {"action": "servicing", "policy_id": policy_id, **body.model_dump(mode="json")},
         action,
     )
+
+
+def _next_servicing_sequence(db: Session, policy_id: str):
+    return (db.scalar(select(func.max(ServicingEvent.sequence)).where(ServicingEvent.policy_id == policy_id)) or 0) + 1
+
+
+@app.post("/api/policies/{policy_id}/appeals")
+def submit_appeal(
+    policy_id: str,
+    body: AppealRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    policy = own(db, Policy, policy_id, user, lock=True)
+
+    def action():
+        contested = db.scalar(
+            select(ServicingEvent).where(
+                ServicingEvent.policy_id == policy.id,
+                ServicingEvent.root_id == body.contested_event_id,
+                ServicingEvent.record_type == "decision",
+            )
+        )
+        if not contested:
+            raise HTTPException(404, "The servicing decision to appeal was not found.")
+        existing = db.scalar(
+            select(ServicingEvent).where(
+                ServicingEvent.policy_id == policy.id,
+                ServicingEvent.root_id == body.appeal_id,
+                ServicingEvent.record_type == "appeal",
+            )
+        )
+        if existing:
+            return {"appeal": present_event(existing), "status": "pending_review"}
+        appeal = ServicingEvent(
+            owner_id=user.id,
+            policy_id=policy.id,
+            root_id=body.appeal_id,
+            record_type="appeal",
+            kind="appeal",
+            effective_month=contested.effective_month,
+            sequence=_next_servicing_sequence(db, policy.id),
+            payload={"contested_event_id": body.contested_event_id, "statement": body.statement, "evidence": body.evidence},
+            supersedes_id=contested.id,
+        )
+        db.add(appeal)
+        db.flush()
+        db.add(Audit(owner_id=user.id, action="servicing_appeal_submitted", subject_id=appeal.id, details={"contested_event_id": body.contested_event_id}))
+        return {"appeal": present_event(appeal), "status": "pending_review"}
+
+    return command(db, user, idempotency_key, {"action": "submit_appeal", "policy_id": policy_id, **body.model_dump()}, action)
+
+
+@app.get("/api/broker/appeals")
+def broker_appeals(user: User = Depends(current_user), db: Session = Depends(session)):
+    appeals = db.scalars(
+        select(ServicingEvent)
+        .where(ServicingEvent.owner_id == user.id, ServicingEvent.record_type == "appeal")
+        .order_by(ServicingEvent.created_at.desc())
+    ).all()
+    rows = []
+    for appeal in appeals:
+        review = db.scalar(
+            select(ServicingEvent).where(ServicingEvent.record_type == "appeal_review", ServicingEvent.supersedes_id == appeal.id)
+        )
+        contested = db.scalar(select(ServicingEvent).where(ServicingEvent.id == appeal.supersedes_id))
+        rows.append({
+            "id": appeal.id,
+            "appeal_id": appeal.root_id,
+            "policy_id": appeal.policy_id,
+            "status": "reviewed" if review else "pending_review",
+            "appeal": appeal.payload,
+            "contested_decision": present_event(contested) if contested else None,
+            "review": present_event(review) if review else None,
+            "created_at": appeal.created_at.isoformat(),
+        })
+    return rows
+
+
+@app.post("/api/broker/appeals/{appeal_id}/review")
+def review_appeal(
+    appeal_id: str,
+    body: BrokerAppealReview,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    appeal = own(db, ServicingEvent, appeal_id, user, lock=True)
+
+    def action():
+        if appeal.record_type != "appeal":
+            raise HTTPException(422, "This record is not an appeal.")
+        already_reviewed = db.scalar(select(ServicingEvent).where(ServicingEvent.record_type == "appeal_review", ServicingEvent.supersedes_id == appeal.id))
+        if already_reviewed:
+            raise HTTPException(409, "This appeal has already been reviewed.")
+        contested = db.scalar(select(ServicingEvent).where(ServicingEvent.id == appeal.supersedes_id))
+        if not contested or contested.record_type != "decision":
+            raise HTTPException(409, "The original servicing decision is unavailable.")
+        policy = own(db, Policy, appeal.policy_id, user, lock=True)
+        review = ServicingEvent(
+            owner_id=user.id,
+            policy_id=policy.id,
+            root_id=appeal.root_id,
+            record_type="appeal_review",
+            kind="appeal",
+            effective_month=contested.effective_month,
+            sequence=_next_servicing_sequence(db, policy.id),
+            payload={"action": body.action, "note": body.note, "contested_event_id": contested.root_id},
+            supersedes_id=appeal.id,
+            reviewer_action=body.action,
+        )
+        db.add(review)
+        effective = None
+        if body.action == "overturn":
+            corrected = {**contested.payload}
+            if body.corrected_policy_month is not None:
+                corrected["policy_month"] = body.corrected_policy_month
+            if body.corrected_provider_tier:
+                corrected["provider_tier"] = body.corrected_provider_tier
+            provisional = evaluate_servicing(policy.snapshot["plan"], corrected, empty_ledger())
+            revision = ServicingEvent(
+                owner_id=user.id,
+                policy_id=policy.id,
+                root_id=contested.root_id,
+                record_type="revision",
+                kind=contested.kind,
+                effective_month=corrected.get("policy_month"),
+                sequence=_next_servicing_sequence(db, policy.id) + 1,
+                payload=corrected,
+                outcome=provisional["outcome"],
+                reason_code=provisional["reason_code"],
+                plan_pays_fils=provisional["plan_pays_fils"],
+                member_pays_fils=provisional["member_pays_fils"],
+                calculation=provisional["calculation"],
+                ledger_before=provisional["ledger_before"],
+                ledger_after=provisional["ledger_after"],
+                supersedes_id=contested.id,
+                reviewer_action="overturn",
+            )
+            db.add(revision)
+            db.flush()
+            ledger, decisions = rebuild_projection(db, policy)
+            effective = decisions[contested.root_id]
+            policy.version += 1
+        else:
+            db.flush()
+            ledger, _ = rebuild_projection(db, policy)
+        effective_summary = (
+            {
+                "event_id": effective["event_id"],
+                "outcome": effective["outcome"],
+                "reason_code": effective["reason_code"],
+                "plan_pays_fils": effective["plan_pays_fils"],
+                "member_pays_fils": effective["member_pays_fils"],
+            }
+            if effective
+            else present_event(contested)
+        )
+        db.add(ReviewDecision(owner_id=user.id, servicing_event_id=appeal.id, action=body.action, note=body.note, before=present_event(contested), after=effective_summary))
+        db.add(Audit(owner_id=user.id, action="servicing_appeal_reviewed", subject_id=appeal.id, details={"action": body.action, "contested_event_id": contested.root_id}))
+        return {"appeal_id": appeal.id, "status": "reviewed", "action": body.action, "effective_decision": effective_summary if effective else None, "ledger": ledger}
+
+    return command(db, user, idempotency_key, {"action": "review_appeal", "appeal_id": appeal_id, **body.model_dump()}, action)
 
 
 class ImportRequest(BaseModel):
