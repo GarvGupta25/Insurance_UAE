@@ -9,6 +9,10 @@ Answer = Literal["yes", "no", "unknown", "declined"]
 
 class Facts(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    age: int | None = Field(default=None, ge=0, le=120)
+    marital_status: Literal["single", "married", "divorced", "widowed"] | None = None
+    budget_category: Literal["low", "moderate", "comfortable", "not primary concern"] | None = None
+    near_term_needs: list[Short] = Field(default_factory=list, max_length=10)
     legal_name: Short | None = None
     date_of_birth: date | None = None
     nationality: Short | None = None

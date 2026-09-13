@@ -22,6 +22,21 @@ def source_data():
     return json.loads((DATA / "hackathon_data.json").read_text(encoding="utf-8-sig"))
 
 
+def fixture_facts(profile):
+    """Copy declared applicant facts without using the fixture's approved plan or future events."""
+    conditions = list(profile["conditions"])
+    return {
+        "age": profile["age"],
+        "marital_status": profile["marital_status"],
+        "smoker": "yes" if profile["smoker"] else "no",
+        "diagnosed_conditions": "yes" if conditions else "no",
+        "conditions": conditions,
+        "budget_category": profile["budget"],
+        "priorities": list(profile["stated_priorities"]),
+        "near_term_needs": list(profile["near_term_needs"]),
+    }
+
+
 def money(value):
     return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
