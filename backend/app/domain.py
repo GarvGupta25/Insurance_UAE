@@ -206,7 +206,7 @@ def map_application(plan_id, facts, email):
     if plan_id == "plan_a":
         payload = {
             "applicant": {
-                "full_name": facts.get("legal_name"),
+                "full_name": facts.get("legal_name") or facts.get("display_name"),
                 "birth_date": facts.get("date_of_birth"),
                 "emirate": facts.get("emirate"),
                 "email": email,
@@ -219,7 +219,7 @@ def map_application(plan_id, facts, email):
         schema = "sandbox-essential-v1"
     else:
         payload = {
-            "memberName": facts.get("legal_name"),
+            "memberName": facts.get("legal_name") or facts.get("display_name"),
             "dob": facts.get("date_of_birth"),
             "residence": {"region": facts.get("emirate"), "category": facts.get("residency")},
             "contactEmail": email,

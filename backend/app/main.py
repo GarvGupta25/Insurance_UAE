@@ -415,14 +415,15 @@ def create_quote(
         missing = readiness(row.facts)["missing"]
         if missing:
             raise HTTPException(422, "Complete these details first: " + ", ".join(missing))
-        if date.fromisoformat(row.facts["start_date"]) < date.today():
+        start_date = row.facts.get("start_date") or date.today().isoformat()
+        if date.fromisoformat(start_date) < date.today():
             raise HTTPException(422, "Choose a current or future start date for this new shopping case.")
         items = compare(row.facts)
         supported = [r for r in items if r["status"] == "supported"]
         snapshot = {
-            "applicant_name": row.facts["legal_name"],
+            "applicant_name": row.facts.get("display_name") or row.facts.get("legal_name") or "Demo member",
             "generated_at": now().isoformat(),
-            "start_date": row.facts["start_date"],
+            "start_date": start_date,
             "items": items,
             "classification": classify(row.facts),
             "mode": "synthetic_demo",
@@ -485,8 +486,8 @@ def prepare_application(
             **mapped,
             "plan": item["plan"],
             "profile_version": row.version,
-            "start_date": row.facts["start_date"],
-            "payment_frequency": row.facts["payment_frequency"],
+            "start_date": quote.snapshot["start_date"],
+            "payment_frequency": row.facts.get("payment_frequency") or "annual",
             "mode": "synthetic_demo",
             "prepared_at": now().isoformat(),
         }

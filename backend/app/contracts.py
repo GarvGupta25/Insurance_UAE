@@ -9,6 +9,7 @@ Answer = Literal["yes", "no", "unknown", "declined"]
 
 class Facts(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    display_name: Short | None = None
     age: int | None = Field(default=None, ge=0, le=120)
     marital_status: Literal["single", "married", "divorced", "widowed"] | None = None
     budget_category: Literal["low", "moderate", "comfortable", "not primary concern"] | None = None
@@ -77,6 +78,11 @@ QUESTION_GROUPS = {
     "Funding and preferences": ["payer", "annual_budget", "strict_budget", "payment_frequency"],
 }
 PROMPTS = {
+    "age": "How old are you?",
+    "marital_status": "Are you single, married, divorced or widowed?",
+    "budget_category": "Is your budget low, moderate, comfortable, or not your primary concern?",
+    "priorities": "What matters most to you in a plan?",
+    "conditions": "Which diagnosed conditions need to be considered?",
     "legal_name": "What name should we use for your insurance profile?",
     "date_of_birth": "What is your date of birth?",
     "nationality": "What is your nationality?",
@@ -100,6 +106,26 @@ PROMPTS = {
 
 
 def readiness(facts: dict):
+    legacy_fields = {"legal_name", "date_of_birth", "nationality", "residency", "emirate", "payer"}
+    if not any(facts.get(field) is not None for field in legacy_fields):
+        groups = {
+            "About you": ["age", "marital_status", "smoker"],
+            "Health and upcoming care": ["diagnosed_conditions"],
+            "Budget and priorities": ["budget_category", "priorities"],
+        }
+        if facts.get("diagnosed_conditions") == "yes":
+            groups["Health and upcoming care"].append("conditions")
+        missing = [
+            key for values in groups.values() for key in values
+            if facts.get(key) is None or facts.get(key) == "" or key in {"conditions", "priorities"} and not facts.get(key)
+        ]
+        return {
+            "mode": "challenge",
+            "groups": groups,
+            "missing": missing,
+            "ready": not missing,
+            "question": PROMPTS[missing[0]] if missing else "Your profile is ready. Compare the three fictional plans.",
+        }
     groups = {key: list(value) for key, value in QUESTION_GROUPS.items()}
     if facts.get("maternity"):
         groups["Health and cover"].append("maximum_maternity_wait")
@@ -113,6 +139,7 @@ def readiness(facts: dict):
         key for values in groups.values() for key in values if facts.get(key) is None or facts.get(key) == ""
     ]
     return {
+        "mode": "extended",
         "groups": groups,
         "missing": missing,
         "ready": not missing,
