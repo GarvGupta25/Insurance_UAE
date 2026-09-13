@@ -39,6 +39,16 @@ def work_once(compiled):
         message = db.get(Message, run.message_id)
         profile = db.scalar(select(Profile).where(Profile.owner_id == run.owner_id))
         facts = {k: v for k, v in profile.facts.items() if k not in {"passport_number", "emirates_id"}}
+        recent_messages = list(
+            reversed(
+                db.scalars(
+                    select(Message)
+                    .where(Message.case_id == run.case_id, Message.id != message.id)
+                    .order_by(Message.created_at.desc())
+                    .limit(8)
+                ).all()
+            )
+        )
         run_id, owner_id, case_id, message_id, version = (
             run.id,
             run.owner_id,
@@ -46,11 +56,18 @@ def work_once(compiled):
             message.id,
             profile.version,
         )
-        state = {"text": message.text, "facts": facts, "context": message.details.get("context", {})}
+        state = {
+            "text": message.text,
+            "facts": facts,
+            "context": {
+                **message.details.get("context", {}),
+                "conversation": [{"role": item.role, "text": item.text} for item in recent_messages],
+            },
+        }
         db.commit()
     try:
         output = compiled.invoke(
-            state, {"configurable": {"thread_id": f"{owner_id}:{case_id}:{run_id}"}, "recursion_limit": 8}
+            state, {"configurable": {"thread_id": f"{owner_id}:{case_id}"}, "recursion_limit": 8}
         )["result"]
         status = "complete"
     except Exception:
