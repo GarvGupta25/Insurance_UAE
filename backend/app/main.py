@@ -33,6 +33,7 @@ from .contracts import (
 from .db import session
 from .documents import extract_identity, quotation_pdf
 from .domain import (
+    classify,
     compare,
     digest,
     empty_ledger,
@@ -423,6 +424,7 @@ def create_quote(
             "generated_at": now().isoformat(),
             "start_date": row.facts["start_date"],
             "items": items,
+            "classification": classify(row.facts),
             "mode": "synthetic_demo",
             "quote_kind": "indicative",
             "recommended_plan_id": supported[0]["plan"]["id"] if supported else None,
@@ -488,7 +490,7 @@ def prepare_application(
             "mode": "synthetic_demo",
             "prepared_at": now().isoformat(),
         }
-        certainty = "tradeoff" if item["gaps"] else "missing_terms" if item["unknowns"] else "clear"
+        certainty = "tradeoff" if item["tradeoffs"] else "missing_terms" if item["unknowns"] else "clear"
         recommendation = Recommendation(
             owner_id=user.id,
             case_id=quote.case_id,

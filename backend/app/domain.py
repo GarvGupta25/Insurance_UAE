@@ -41,15 +41,48 @@ def money(value):
     return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def classify(facts):
+    """Route declared needs for review; this is not underwriting or a premium rule."""
+    age = facts.get("age")
+    age_band = "under_40" if age is not None and age < 40 else "40_54" if age is not None and age < 55 else "55_plus" if age is not None else "unknown"
+    conditions = facts.get("conditions") or []
+    needs = " ".join(facts.get("near_term_needs") or []).lower()
+    priorities = " ".join(facts.get("priorities") or []).lower()
+    maternity_soon = "maternity within 12 months" in needs
+    specialist_need = "specialist" in needs or "specialist" in priorities
+    cohort = (
+        "complex_ongoing_care" if len(conditions) > 1 and specialist_need else
+        "ongoing_chronic_care" if conditions else
+        "near_term_maternity" if facts.get("maternity") or maternity_soon else
+        "general_needs"
+    )
+    flags = []
+    if conditions:
+        flags.append({"code": "declared_conditions", "source": "conditions", "explanation": "Existing conditions were declared.", "review_relevance": "Check the plan's existing-condition terms and waiting period."})
+    if maternity_soon:
+        flags.append({"code": "maternity_within_year", "source": "near_term_needs", "explanation": "Maternity cover is needed within twelve months.", "review_relevance": "A twelve-month wait does not meet a within-year need."})
+    if "wide hospital access" in priorities:
+        flags.append({"code": "wide_access_preference", "source": "priorities", "explanation": "Wide hospital access was requested.", "review_relevance": "Compare the available provider networks."})
+    elif "good network access" in priorities:
+        flags.append({"code": "standard_access_preference", "source": "priorities", "explanation": "Good network access was requested.", "review_relevance": "Restricted access needs an explicit tradeoff."})
+    if facts.get("diagnosed_conditions") == "unknown":
+        flags.append({"code": "conditions_unknown", "source": "diagnosed_conditions", "explanation": "Existing-condition needs are unknown.", "review_relevance": "Clarify before relying on a waiting-period comparison."})
+    return {"cohort": cohort, "age_band": age_band, "flags": flags}
+
+
 def compare(facts):
     results = []
+    needs = " ".join(facts.get("near_term_needs") or []).lower()
+    priorities = " ".join(facts.get("priorities") or []).lower()
+    maternity_soon = "maternity within 12 months" in needs
+    ongoing_chronic = "continuous chronic condition management" in needs
     for plan in plans():
-        gaps, unknowns, reasons = [], [], []
-        if facts.get("maternity"):
+        gaps, unknowns, reasons, tradeoffs = [], [], [], []
+        if facts.get("maternity") or maternity_soon:
             term = plan["maternity"]
             if not term["covered"]:
                 gaps.append("Maternity is excluded.")
-            elif term["waiting_period_months"] > facts.get("maximum_maternity_wait", 24):
+            elif (maternity_soon and term["waiting_period_months"] >= 12) or term["waiting_period_months"] > facts.get("maximum_maternity_wait", 24):
                 gaps.append(
                     f"Maternity starts after {term['waiting_period_months']} months, later than your stated need."
                 )
@@ -63,12 +96,14 @@ def compare(facts):
                 gaps.append("Declared existing conditions are excluded.")
             elif term["waiting_period_months"] and facts.get("immediate_chronic_cover"):
                 gaps.append(f"Existing-condition cover has a {term['waiting_period_months']}-month gap.")
+            elif term["waiting_period_months"] and ongoing_chronic:
+                tradeoffs.append(f"Ongoing condition care faces a {term['waiting_period_months']}-month waiting period; confirm whether this gap is acceptable before approval.")
             else:
                 reasons.append(f"Existing-condition waiting period: {term['waiting_period_months']} months.")
         if facts.get("diagnosed_conditions") in ["unknown", "declined"]:
             unknowns.append("Existing-condition requirements need clarification.")
         tiers = {"restricted": 0, "standard": 1, "wide": 2}
-        preferred = facts.get("preferred_network")
+        preferred = facts.get("preferred_network") or ("wide" if "wide hospital access" in priorities else "standard" if "good network access" in priorities else None)
         if preferred and tiers[plan["network"]] < tiers[preferred]:
             gaps.append("The network is narrower than your requested access.")
         dental = facts.get("dental")
@@ -100,6 +135,7 @@ def compare(facts):
                 "gaps": gaps,
                 "unknowns": unknowns,
                 "reasons": reasons,
+                "tradeoffs": tradeoffs,
                 "premium_fils": money(plan["annual_premium"]),
                 "monthly_budget_equivalent_fils": int(
                     (Decimal(plan["annual_premium"]) * 100 / 12).quantize(
