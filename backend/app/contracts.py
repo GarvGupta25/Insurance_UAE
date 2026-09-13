@@ -217,3 +217,17 @@ class BrokerAppealReview(BaseModel):
         if self.action == "overturn" and self.corrected_policy_month is None and not self.corrected_provider_tier:
             raise ValueError("An overturned decision needs a corrected policy month or provider tier.")
         return self
+
+
+class BrokerReassessmentReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["retain", "recommend_change"]
+    selected_plan_id: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    note: Annotated[str, Field(min_length=1, max_length=2000)]
+
+    @model_validator(mode="after")
+    def changed_recommendation_has_plan(self):
+        if self.action == "recommend_change" and not self.selected_plan_id:
+            raise ValueError("Choose one supported fictional plan to recommend.")
+        return self

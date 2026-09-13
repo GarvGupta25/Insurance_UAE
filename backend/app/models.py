@@ -159,6 +159,7 @@ class ReviewDecision(Owned, Base):
     __tablename__ = "review_decisions"
     recommendation_id: Mapped[str | None] = mapped_column(ForeignKey("recommendations.id"), nullable=True)
     servicing_event_id: Mapped[str | None] = mapped_column(ForeignKey("servicing_events.id"), nullable=True)
+    reassessment_id: Mapped[str | None] = mapped_column(ForeignKey("policy_reassessments.id"), nullable=True)
     action: Mapped[str] = mapped_column(String(32))
     note: Mapped[str] = mapped_column(String(2000), default="")
     before: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -202,6 +203,8 @@ class PolicyReassessment(Owned, Base):
     __tablename__ = "policy_reassessments"
     policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id"), index=True)
     profile_version: Mapped[int]
+    status: Mapped[str] = mapped_column(String(32), default="pending_review", index=True)
+    recommended_plan_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     report: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

@@ -19,6 +19,7 @@ from .config import settings
 from .contracts import (
     AppealRequest,
     BrokerAppealReview,
+    BrokerReassessmentReview,
     BrokerRecommendationReview,
     ConfirmRequest,
     MessageRequest,
@@ -740,7 +741,7 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         "servicing": [present_event(event) for event in servicing],
         "servicing_ledger": servicing_ledger.ledger if servicing_ledger else empty_ledger(),
         "reassessments": [
-            {"id": item.id, "profile_version": item.profile_version, "report": item.report, "created_at": item.created_at.isoformat()}
+            {"id": item.id, "profile_version": item.profile_version, "status": item.status, "recommended_plan_id": item.recommended_plan_id, "report": item.report, "created_at": item.created_at.isoformat()}
             for item in reassessments
         ],
     }
@@ -786,6 +787,54 @@ def reassess_policy(
         return {"id": assessment.id, "profile_version": assessment.profile_version, "report": assessment.report}
 
     return command(db, user, idempotency_key, {"action": "reassess_policy", "policy_id": policy_id}, action)
+
+
+@app.get("/api/broker/reassessments")
+def broker_reassessments(user: User = Depends(current_user), db: Session = Depends(session)):
+    rows = db.scalars(
+        select(PolicyReassessment)
+        .where(PolicyReassessment.owner_id == user.id)
+        .order_by(PolicyReassessment.created_at.desc())
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "policy_id": row.policy_id,
+            "profile_version": row.profile_version,
+            "status": row.status,
+            "recommended_plan_id": row.recommended_plan_id,
+            "report": row.report,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/broker/reassessments/{reassessment_id}/review")
+def review_reassessment(
+    reassessment_id: str,
+    body: BrokerReassessmentReview,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    assessment = own(db, PolicyReassessment, reassessment_id, user, lock=True)
+
+    def action():
+        if assessment.status != "pending_review":
+            raise HTTPException(409, "This reassessment has already been reviewed.")
+        candidates = [assessment.report["current"], *assessment.report.get("alternatives", [])]
+        selected_plan_id = body.selected_plan_id or assessment.report["current"]["plan"]["id"]
+        selected = next((item for item in candidates if item["plan"]["id"] == selected_plan_id and item["status"] == "supported"), None)
+        if not selected:
+            raise HTTPException(422, "A review can only retain or recommend a currently supported fictional plan.")
+        assessment.status = "reviewed"
+        assessment.recommended_plan_id = selected_plan_id
+        db.add(ReviewDecision(owner_id=user.id, reassessment_id=assessment.id, action=body.action, note=body.note, before={"outcome": assessment.report["outcome"], "current_plan_id": assessment.report["current"]["plan"]["id"]}, after={"recommended_plan_id": selected_plan_id, "status": "reviewed"}))
+        db.add(Audit(owner_id=user.id, action="policy_reassessment_reviewed", subject_id=assessment.id, details={"action": body.action, "recommended_plan_id": selected_plan_id}))
+        return {"id": assessment.id, "status": assessment.status, "recommended_plan_id": selected_plan_id}
+
+    return command(db, user, idempotency_key, {"action": "review_reassessment", "reassessment_id": reassessment_id, **body.model_dump()}, action)
 
 
 @app.post("/api/policies/{policy_id}/servicing")

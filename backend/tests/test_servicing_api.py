@@ -90,3 +90,19 @@ def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
     assert reviewed.json()["ledger"]["annual_paid_fils"] > 0
     detail = client.get(f"/api/policies/{policy}").json()
     assert [item["record_type"] for item in detail["servicing"]] == ["decision", "appeal", "appeal_review", "revision"]
+
+
+def test_reassessment_requires_and_records_a_broker_review(fixture_client):
+    client, _, _ = fixture_client
+    policy = create_policy(client)
+    reassessment = post(client, f"/api/policies/{policy}/reassess", {})
+    assert reassessment.status_code == 200
+    queue = client.get("/api/broker/reassessments").json()
+    assert queue[0]["status"] == "pending_review"
+    review = post(
+        client,
+        f"/api/broker/reassessments/{queue[0]['id']}/review",
+        {"action": "retain", "note": "Current fictional plan remains supported by saved facts."},
+    )
+    assert review.status_code == 200
+    assert review.json()["status"] == "reviewed"
