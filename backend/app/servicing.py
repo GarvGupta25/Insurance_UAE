@@ -1,3 +1,4 @@
+from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from .domain import empty_ledger, evaluate_servicing
@@ -40,7 +41,7 @@ def present_event(record):
 
 
 def rebuild_projection(db, policy):
-    """Replay current effective financial decisions without modifying the audit trail."""
+    """Replay financial roots and append changes to downstream effective decisions."""
     projection = _projection(db, policy)
     rows = db.scalars(
         select(ServicingEvent)
@@ -60,13 +61,45 @@ def rebuild_projection(db, policy):
         key=lambda row: (row.effective_month if row.effective_month is not None else 1201, original_sequence[row.root_id]),
     )
     ledger, decisions = empty_ledger(), {}
+    next_sequence = _next_sequence(db, policy.id)
     for row in effective:
+        if row.kind == "preauth":
+            # A forecast is historical information, never a debit or a revised estimate.
+            continue
         decision = evaluate_servicing(policy.snapshot["plan"], row.payload, ledger)
         decisions[row.root_id] = decision
-        if row.kind != "preauth" and decision["outcome"] == "covered":
+        changed = any(
+            getattr(row, field) != decision[field]
+            for field in ("outcome", "reason_code", "plan_pays_fils", "member_pays_fils", "calculation", "ledger_before", "ledger_after")
+        )
+        if changed:
+            db.add(
+                ServicingEvent(
+                    owner_id=policy.owner_id,
+                    policy_id=policy.id,
+                    root_id=row.root_id,
+                    record_type="revision",
+                    kind=row.kind,
+                    effective_month=row.effective_month,
+                    sequence=next_sequence,
+                    payload=row.payload,
+                    outcome=decision["outcome"],
+                    reason_code=decision["reason_code"],
+                    plan_pays_fils=decision["plan_pays_fils"],
+                    member_pays_fils=decision["member_pays_fils"],
+                    calculation=decision["calculation"],
+                    ledger_before=decision["ledger_before"],
+                    ledger_after=decision["ledger_after"],
+                    supersedes_id=row.id,
+                    reviewer_action="automatic_replay",
+                )
+            )
+            next_sequence += 1
+        if decision["outcome"] == "covered":
             ledger = decision["ledger_after"]
+    db.flush()
     projection.ledger = ledger
-    projection.through_sequence = max((row.sequence for row in rows), default=0)
+    projection.through_sequence = next_sequence - 1
     return ledger, decisions
 
 
@@ -80,7 +113,14 @@ def record_financial_event(db, policy, request):
         )
     )
     if existing:
-        return present_event(existing), _projection(db, policy).ledger
+        if existing.payload != request:
+            raise HTTPException(409, "This servicing reference was already used for different details.")
+        latest = db.scalar(
+            select(ServicingEvent)
+            .where(ServicingEvent.policy_id == policy.id, ServicingEvent.root_id == request["id"], ServicingEvent.record_type.in_(["decision", "revision"]))
+            .order_by(ServicingEvent.sequence.desc())
+        )
+        return present_event(latest), _projection(db, policy).ledger
     projection = _projection(db, policy)
     decision = evaluate_servicing(policy.snapshot["plan"], request, projection.ledger)
     record = ServicingEvent(
@@ -103,6 +143,11 @@ def record_financial_event(db, policy, request):
     db.add(record)
     db.flush()
     ledger, _ = rebuild_projection(db, policy)
-    if request["kind"] != "preauth" and decision["outcome"] == "covered":
+    latest = db.scalar(
+        select(ServicingEvent)
+        .where(ServicingEvent.policy_id == policy.id, ServicingEvent.root_id == request["id"], ServicingEvent.record_type.in_(["decision", "revision"]))
+        .order_by(ServicingEvent.sequence.desc())
+    )
+    if request["kind"] != "preauth":
         policy.version += 1
-    return present_event(record), ledger
+    return present_event(latest), ledger

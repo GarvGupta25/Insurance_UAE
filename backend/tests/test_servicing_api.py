@@ -80,6 +80,28 @@ def test_servicing_preview_is_read_only_and_rejects_a_stale_confirmation(fixture
     assert submitted.json()["decision"]["plan_pays_fils"] == fresh["decision"]["plan_pays_fils"]
 
 
+def test_late_earlier_claim_appends_revised_effective_decisions(fixture_client):
+    client, _, _ = fixture_client
+    policy = create_policy(client, "plan_b")
+    body = {"kind": "claim", "benefit_class": "general", "provider_tier": "in_network_clinic", "billed_amount": 1000}
+    later = post(client, f"/api/policies/{policy}/servicing", {**body, "event_id": "LATER", "policy_month": 8})
+    assert later.status_code == 200, later.text
+    assert later.json()["decision"]["plan_pays_fils"] == 40000
+    earlier = post(client, f"/api/policies/{policy}/servicing", {**body, "event_id": "EARLIER", "policy_month": 7})
+    assert earlier.status_code == 200, earlier.text
+    assert earlier.json()["decision"]["plan_pays_fils"] == 40000
+    assert earlier.json()["ledger"]["annual_paid_fils"] == 120000
+    history = client.get(f"/api/policies/{policy}").json()["servicing"]
+    assert [(row["event_id"], row["record_type"], row["plan_pays_fils"]) for row in history] == [
+        ("LATER", "decision", 40000),
+        ("EARLIER", "decision", 80000),
+        ("EARLIER", "revision", 40000),
+        ("LATER", "revision", 80000),
+    ]
+    assert history[2]["supersedes_id"] == history[1]["id"]
+    assert history[3]["supersedes_id"] == history[0]["id"]
+
+
 def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
     client, _, _ = fixture_client
     policy = create_policy(client, "plan_b")
@@ -109,6 +131,26 @@ def test_appeal_appends_an_overturn_revision_and_replays_ledger(fixture_client):
     assert reviewed.json()["ledger"]["annual_paid_fils"] > 0
     detail = client.get(f"/api/policies/{policy}").json()
     assert [item["record_type"] for item in detail["servicing"]] == ["decision", "appeal", "appeal_review", "revision"]
+
+
+def test_appeal_overturn_appends_downstream_revision_without_changing_original(fixture_client):
+    client, _, _ = fixture_client
+    policy = create_policy(client, "plan_b")
+    denied = post(client, f"/api/policies/{policy}/servicing", {"event_id": "EARLY-WAIT", "kind": "claim", "policy_month": 4, "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "billed_amount": 2800})
+    assert denied.json()["decision"]["reason_code"] == "waiting_period_not_elapsed"
+    later = post(client, f"/api/policies/{policy}/servicing", {"event_id": "LATER-CARE", "kind": "claim", "policy_month": 7, "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "billed_amount": 2600})
+    assert later.json()["decision"]["plan_pays_fils"] == 168000
+    appeal = post(client, f"/api/policies/{policy}/appeals", {"appeal_id": "APPEAL-LATE", "contested_event_id": "EARLY-WAIT", "statement": "The treatment date was recorded incorrectly.", "evidence": ["Verified treatment-date record"]})
+    reviewed = post(client, f"/api/broker/appeals/{appeal.json()['appeal']['id']}/review", {"action": "overturn", "note": "Reviewed the treatment-date record.", "corrected_policy_month": 6})
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["effective_decision"]["plan_pays_fils"] == 184000
+    assert reviewed.json()["ledger"]["annual_paid_fils"] == 392000
+    history = client.get(f"/api/policies/{policy}").json()["servicing"]
+    later_rows = [row for row in history if row["event_id"] == "LATER-CARE"]
+    assert [(row["record_type"], row["plan_pays_fils"]) for row in later_rows] == [
+        ("decision", 168000), ("revision", 208000)
+    ]
+    assert later_rows[1]["supersedes_id"] == later_rows[0]["id"]
 
 
 def test_reassessment_requires_and_records_a_broker_review(fixture_client):
