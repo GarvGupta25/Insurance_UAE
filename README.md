@@ -66,4 +66,4 @@ With Supabase running, create a public-schema backup with `npx supabase db dump 
 - `backend/data/hackathon_data.json` — unchanged supplied fictional plan/profile fixture source.
 - `docs/` — delivery boundary, schema and operational decisions.
 
-Read [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md), [docs/PHASE_ONE_WALKTHROUGH.md](docs/PHASE_ONE_WALKTHROUGH.md), [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md), [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) and [docs/DECISIONS.md](docs/DECISIONS.md) before extending the product.
+Read [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md), [docs/PHASE_1_4_ACCEPTANCE.md](docs/PHASE_1_4_ACCEPTANCE.md), [docs/PHASE_ONE_WALKTHROUGH.md](docs/PHASE_ONE_WALKTHROUGH.md), [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md), [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) and [docs/DECISIONS.md](docs/DECISIONS.md) before extending the product.

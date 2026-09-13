@@ -18,3 +18,4 @@ supabase/.temp/
 supabase/.branches/
 *.tsbuildinfo
 backend/*-live*.log
+frontend/vite-live*.log
