@@ -18,6 +18,10 @@ def plans():
     return json.loads((DATA / "hackathon_data.json").read_text(encoding="utf-8-sig"))["plans"]
 
 
+def source_data():
+    return json.loads((DATA / "hackathon_data.json").read_text(encoding="utf-8-sig"))
+
+
 def money(value):
     return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -160,3 +164,145 @@ def map_application(plan_id, facts, email):
         "destination": "Helm in-app carrier sandbox",
         "provenance": {key: "saved profile" for key in payload},
     }
+
+
+# Servicing is deliberately deterministic. The language layer may help capture a request,
+# but it never selects a rule, calculates a liability, or mutates a benefit balance.
+def empty_ledger():
+    return {
+        "deductible_met_fils": 0,
+        "annual_paid_fils": 0,
+        "maternity_paid_fils": 0,
+        "financial_event_ids": [],
+    }
+
+
+def _fils_to_aed(value):
+    return None if value is None else Decimal(value) / Decimal(100)
+
+
+def _round_fils(value):
+    return int(Decimal(value).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _plan_by_id(plan_id):
+    return next(plan for plan in plans() if plan["id"] == plan_id)
+
+
+def _amount_fils(operation):
+    for name in ("billed_amount", "estimated_amount", "amount_paid_by_member"):
+        if operation.get(name) is not None:
+            return money(operation[name])
+    raise ValueError("The operation does not contain an amount.")
+
+
+def _benefit_term(plan, benefit_class):
+    if benefit_class == "maternity":
+        return plan["maternity"]
+    if benefit_class == "chronic_preexisting":
+        return plan["chronic_preexisting"]
+    return {"covered": True, "waiting_period_months": 0, "limit": None}
+
+
+def _result(operation, ledger, outcome, reason_code, plan_pays_fils, member_pays_fils, calculation):
+    return {
+        "event_id": operation["id"],
+        "kind": operation["kind"],
+        "policy_month": operation.get("policy_month"),
+        "outcome": outcome,
+        "reason_code": reason_code,
+        "plan_pays": _fils_to_aed(plan_pays_fils),
+        "member_pays": _fils_to_aed(member_pays_fils),
+        "plan_pays_fils": plan_pays_fils,
+        "member_pays_fils": member_pays_fils,
+        "calculation": calculation,
+        "ledger_before": dict(ledger),
+        "ledger_after": dict(ledger),
+    }
+
+
+def evaluate_servicing(plan, operation, ledger=None):
+    """Return a pure servicing decision and resulting ledger projection.
+
+    Monetary values in inputs are AED, while all intermediate and projection values use fils.
+    Pre-authorizations are immutable forecasts and never consume a balance.
+    """
+    ledger = dict(ledger or empty_ledger())
+    kind = operation["kind"]
+    if kind not in {"claim", "preauth", "reimbursement"}:
+        raise ValueError("Only financial servicing operations can be evaluated.")
+    if operation.get("geography") == "abroad":
+        return _result(
+            operation,
+            ledger,
+            "insufficient_data",
+            "insufficient_data",
+            None,
+            None,
+            ["The available policy terms do not define overseas cover."],
+        )
+
+    amount_fils = _amount_fils(operation)
+    benefit = operation["benefit_class"]
+    term = _benefit_term(plan, benefit)
+    if not term["covered"]:
+        return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "benefit_excluded", 0, amount_fils, ["This benefit is excluded."])
+    if operation.get("policy_month", 0) < term.get("waiting_period_months", 0):
+        return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "waiting_period_not_elapsed", 0, amount_fils, ["The applicable waiting period has not elapsed."])
+
+    allowed = source_data()["provider_tiers"].get(plan["network"], [])
+    if operation.get("provider_tier") not in allowed:
+        return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "provider_out_of_network", 0, amount_fils, ["The provider tier is outside this plan's network."])
+
+    sublimit_fils = money(term["limit"]) if term.get("limit") is not None else None
+    used_fils = ledger["maternity_paid_fils"] if benefit == "maternity" else 0
+    if sublimit_fils is not None and used_fils >= sublimit_fils:
+        return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "sublimit_exhausted", 0, amount_fils, ["The benefit sublimit is already exhausted."])
+
+    annual_limit_fils = money(plan["annual_limit"])
+    if ledger["annual_paid_fils"] >= annual_limit_fils:
+        return _result(operation, ledger, "declined" if kind == "preauth" else "denied", "annual_limit_reached", 0, amount_fils, ["The annual plan-payment limit is already exhausted."])
+
+    deductible_remaining = max(money(plan["deductible"]) - ledger["deductible_met_fils"], 0)
+    deductible_applied = min(deductible_remaining, amount_fils)
+    covered_after_deductible = amount_fils - deductible_applied
+    plan_share = _round_fils(
+        Decimal(covered_after_deductible) * (Decimal(100 - plan["outpatient_copay_pct"]) / Decimal(100))
+    )
+    if sublimit_fils is not None:
+        plan_share = min(plan_share, max(sublimit_fils - used_fils, 0))
+    plan_share = min(plan_share, max(annual_limit_fils - ledger["annual_paid_fils"], 0))
+    member_share = amount_fils - plan_share
+    limited = plan_share < _round_fils(
+        Decimal(covered_after_deductible) * (Decimal(100 - plan["outpatient_copay_pct"]) / Decimal(100))
+    )
+    calculation = [
+        f"Amount: AED {_fils_to_aed(amount_fils)}.",
+        f"Deductible applied: AED {_fils_to_aed(deductible_applied)}.",
+        f"Plan payment after copay and applicable limits: AED {_fils_to_aed(plan_share)}.",
+    ]
+    outcome = "approved_with_limit" if kind == "preauth" and limited else "approved" if kind == "preauth" else "covered"
+    result = _result(operation, ledger, outcome, "covered", plan_share, member_share, calculation)
+    if kind == "preauth":
+        return result
+
+    updated = dict(ledger)
+    updated["deductible_met_fils"] += deductible_applied
+    updated["annual_paid_fils"] += plan_share
+    if benefit == "maternity":
+        updated["maternity_paid_fils"] += plan_share
+    updated["financial_event_ids"] = [*ledger["financial_event_ids"], operation["id"]]
+    result["ledger_after"] = updated
+    return result
+
+
+def replay_servicing(plan, operations):
+    """Evaluate effective financial roots in supplied chronological order."""
+    ledger = empty_ledger()
+    results = []
+    for operation in operations:
+        decision = evaluate_servicing(plan, operation, ledger)
+        results.append(decision)
+        if operation["kind"] != "preauth" and decision["outcome"] == "covered":
+            ledger = decision["ledger_after"]
+    return results, ledger
