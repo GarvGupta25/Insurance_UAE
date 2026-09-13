@@ -939,7 +939,18 @@ def submit_appeal(
             )
         )
         if existing:
-            return {"appeal": present_event(existing), "status": "pending_review"}
+            reviewed = db.scalar(select(ServicingEvent.id).where(ServicingEvent.record_type == "appeal_review", ServicingEvent.supersedes_id == existing.id))
+            return {"appeal": present_event(existing), "status": "reviewed" if reviewed else "pending_review"}
+        latest = db.scalar(
+            select(ServicingEvent)
+            .where(ServicingEvent.policy_id == policy.id, ServicingEvent.root_id == contested.root_id, ServicingEvent.record_type.in_(["decision", "revision"]))
+            .order_by(ServicingEvent.sequence.desc())
+        )
+        if contested.kind not in {"claim", "reimbursement"} or latest.outcome != "denied":
+            raise HTTPException(422, "Only a currently denied claim or reimbursement can be appealed.")
+        prior_appeal = db.scalar(select(ServicingEvent.id).where(ServicingEvent.record_type == "appeal", ServicingEvent.supersedes_id == contested.id))
+        if prior_appeal:
+            raise HTTPException(409, "This servicing decision already has an appeal.")
         appeal = ServicingEvent(
             owner_id=user.id,
             policy_id=policy.id,
@@ -1021,6 +1032,8 @@ def review_appeal(
         db.add(review)
         effective = None
         if body.action == "overturn":
+            if not appeal.payload.get("evidence"):
+                raise HTTPException(422, "An overturned decision needs attached evidence for broker review.")
             corrected = {**contested.payload}
             if body.corrected_policy_month is not None:
                 corrected["policy_month"] = body.corrected_policy_month

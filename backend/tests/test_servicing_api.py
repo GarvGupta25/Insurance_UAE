@@ -229,3 +229,46 @@ def test_reassessment_requires_and_records_a_broker_review(fixture_client):
     )
     assert review.status_code == 200
     assert review.json()["status"] == "reviewed"
+
+
+def test_appeal_accepts_only_denied_financial_decisions_and_requires_evidence_to_overturn(fixture_client):
+    client, _, _ = fixture_client
+    policy = create_policy(fixture_client, "plan_b")
+    covered = post(client, f"/api/policies/{policy}/servicing", {
+        "event_id": "COVERED", "kind": "claim", "policy_month": 7,
+        "benefit_class": "general", "provider_tier": "in_network_clinic", "billed_amount": 1000,
+    })
+    assert covered.json()["decision"]["outcome"] == "covered"
+    preauth = post(client, f"/api/policies/{policy}/servicing", {
+        "event_id": "DECLINED-PRE", "kind": "preauth", "policy_month": 1,
+        "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "estimated_amount": 1000,
+    })
+    assert preauth.json()["decision"]["outcome"] == "declined"
+    for event_id in ("COVERED", "DECLINED-PRE"):
+        invalid = post(client, f"/api/policies/{policy}/appeals", {
+            "appeal_id": f"APPEAL-{event_id}", "contested_event_id": event_id,
+            "statement": "Please review this decision.",
+        })
+        assert invalid.status_code == 422, invalid.text
+
+    denied = post(client, f"/api/policies/{policy}/servicing", {
+        "event_id": "WAIT-NO-EVIDENCE", "kind": "claim", "policy_month": 1,
+        "benefit_class": "chronic_preexisting", "provider_tier": "in_network_clinic", "billed_amount": 1000,
+    })
+    assert denied.json()["decision"]["outcome"] == "denied"
+    body = {"appeal_id": "APPEAL-NO-EVIDENCE", "contested_event_id": "WAIT-NO-EVIDENCE", "statement": "I disagree with the recorded month."}
+    appeal = post(client, f"/api/policies/{policy}/appeals", body)
+    assert appeal.status_code == 200, appeal.text
+    duplicate = post(client, f"/api/policies/{policy}/appeals", {**body, "appeal_id": "ANOTHER-APPEAL"})
+    assert duplicate.status_code == 409
+    appeal_id = appeal.json()["appeal"]["id"]
+    rejected = broker_post(fixture_client, f"/api/broker/appeals/{appeal_id}/review", {
+        "action": "overturn", "note": "No independent evidence was attached.", "corrected_policy_month": 7,
+    })
+    assert rejected.status_code == 422, rejected.text
+    upheld = broker_post(fixture_client, f"/api/broker/appeals/{appeal_id}/review", {
+        "action": "uphold", "note": "The recorded waiting period still applies.",
+    })
+    assert upheld.status_code == 200, upheld.text
+    repeated = post(client, f"/api/policies/{policy}/appeals", body)
+    assert repeated.json()["status"] == "reviewed"
