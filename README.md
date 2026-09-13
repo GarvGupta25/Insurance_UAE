@@ -52,7 +52,7 @@ npm run check
 npm run build
 ```
 
-The last backend command uses a new synthetic local Supabase account and checks the entire authenticated flow. It does not use a real carrier, payment or Groq credential.
+The last backend command creates separate synthetic member and broker accounts, assigns the broker through the local administrator database connection, and checks the authenticated quote → approval → policy → claim → sandbox receipt flow. It requires the local Supabase stack, API and worker to be running. It does not use a real carrier, payment or Groq credential.
 
 ## Local data backup
 
