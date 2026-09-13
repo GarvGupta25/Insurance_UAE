@@ -107,6 +107,30 @@ def compare(facts):
     return results
 
 
+def reassess_fit(current_plan_id, facts, servicing_history):
+    """Explain whether present needs still fit frozen terms; never switches a policy automatically."""
+    comparison = compare(facts)
+    current = next(item for item in comparison if item["plan"]["id"] == current_plan_id)
+    effective = {}
+    for event in servicing_history:
+        if event["record_type"] in {"decision", "revision"}:
+            effective[event["root_id"]] = event
+    covered = [event for event in effective.values() if event["outcome"] == "covered"]
+    findings = [*current["gaps"], *current["unknowns"]]
+    if not findings:
+        findings.append("The current fictional plan remains supported by the saved profile details.")
+    if covered:
+        findings.append(f"This assessment considered {len(covered)} covered servicing event(s) in the recorded history.")
+    alternatives = [item for item in comparison if item["plan"]["id"] != current_plan_id and item["status"] == "supported"]
+    return {
+        "outcome": "review" if current["gaps"] or current["unknowns"] else "retain",
+        "current": current,
+        "alternatives": alternatives,
+        "findings": findings,
+        "history_event_ids": [event["root_id"] for event in effective.values()],
+    }
+
+
 def installments(total_fils: int, start: str, count: int):
     if total_fils < 0 or count not in (1, 12):
         raise ValueError("Unsupported schedule")

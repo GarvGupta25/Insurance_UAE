@@ -40,6 +40,7 @@ from .domain import (
     map_application,
     money,
     plans,
+    reassess_fit,
 )
 from .models import (
     Application,
@@ -51,6 +52,7 @@ from .models import (
     Message,
     PaymentOrder,
     Policy,
+    PolicyReassessment,
     Quote,
     Receipt,
     Recommendation,
@@ -709,6 +711,11 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         .order_by(ServicingEvent.sequence)
     ).all()
     servicing_ledger = db.scalar(select(LedgerProjection).where(LedgerProjection.policy_id == policy.id))
+    reassessments = db.scalars(
+        select(PolicyReassessment)
+        .where(PolicyReassessment.policy_id == policy.id)
+        .order_by(PolicyReassessment.created_at.desc())
+    ).all()
     return {
         "id": policy.id,
         "status": policy.status,
@@ -732,7 +739,53 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         "total_fils": sum(r.amount for r in rows),
         "servicing": [present_event(event) for event in servicing],
         "servicing_ledger": servicing_ledger.ledger if servicing_ledger else empty_ledger(),
+        "reassessments": [
+            {"id": item.id, "profile_version": item.profile_version, "report": item.report, "created_at": item.created_at.isoformat()}
+            for item in reassessments
+        ],
     }
+
+
+@app.post("/api/policies/{policy_id}/reassess")
+def reassess_policy(
+    policy_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    policy = own(db, Policy, policy_id, user, lock=True)
+
+    def action():
+        if policy.status != "demo_active":
+            raise HTTPException(422, "A fit reassessment needs a verified sandbox policy.")
+        current_profile = profile(db, user)
+        history = db.scalars(
+            select(ServicingEvent).where(ServicingEvent.policy_id == policy.id).order_by(ServicingEvent.sequence)
+        ).all()
+        report = reassess_fit(
+            policy.snapshot["plan"]["id"],
+            current_profile.facts,
+            [
+                {
+                    "root_id": event.root_id,
+                    "record_type": event.record_type,
+                    "outcome": event.outcome,
+                }
+                for event in history
+            ],
+        )
+        assessment = PolicyReassessment(
+            owner_id=user.id,
+            policy_id=policy.id,
+            profile_version=current_profile.version,
+            report=report,
+        )
+        db.add(assessment)
+        db.flush()
+        db.add(Audit(owner_id=user.id, action="policy_reassessed", subject_id=assessment.id, details={"outcome": report["outcome"], "profile_version": current_profile.version}))
+        return {"id": assessment.id, "profile_version": assessment.profile_version, "report": assessment.report}
+
+    return command(db, user, idempotency_key, {"action": "reassess_policy", "policy_id": policy_id}, action)
 
 
 @app.post("/api/policies/{policy_id}/servicing")

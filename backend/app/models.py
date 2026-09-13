@@ -196,6 +196,15 @@ class LedgerProjection(Owned, Base):
     ledger: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class PolicyReassessment(Owned, Base):
+    """Saved informational fit check based on current profile facts and recorded servicing history."""
+
+    __tablename__ = "policy_reassessments"
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id"), index=True)
+    profile_version: Mapped[int]
+    report: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class SourceSnapshot(Base):
     __tablename__ = "source_snapshots"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

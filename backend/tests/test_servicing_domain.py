@@ -1,4 +1,4 @@
-from app.domain import empty_ledger, evaluate_servicing, plans, replay_servicing
+from app.domain import empty_ledger, evaluate_servicing, plans, reassess_fit, replay_servicing
 
 
 def plan(plan_id):
@@ -104,3 +104,17 @@ def test_replay_keeps_preauth_out_of_financial_ledger():
     assert results[0]["ledger_after"] == empty_ledger()
     assert ledger["maternity_paid_fils"] == 2500000
     assert ledger["financial_event_ids"] == ["CLM-2"]
+
+
+def test_reassessment_uses_current_profile_and_effective_servicing_history():
+    report = reassess_fit(
+        "plan_b",
+        {"maternity": True, "maximum_maternity_wait": 3, "diagnosed_conditions": "no", "preferred_network": "standard"},
+        [
+            {"root_id": "CLM-1", "record_type": "decision", "outcome": "denied"},
+            {"root_id": "CLM-1", "record_type": "revision", "outcome": "covered"},
+        ],
+    )
+    assert report["outcome"] == "review"
+    assert report["history_event_ids"] == ["CLM-1"]
+    assert any("Maternity starts" in finding for finding in report["findings"])
