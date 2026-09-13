@@ -55,6 +55,13 @@ def setup_policy(client, plan="plan_b"):
     case, quote = setup_case(client)
     application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
+    review = send(
+        client,
+        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+        {"action": "approve", "note": "Synthetic broker review."},
+    )
+    assert review.status_code == 200, review.text
+    preview = client.get(f"/api/applications/{application}").json()
     body = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
     result = send(client, f"/api/applications/{application}/submit", body)
     assert result.status_code == 200, result.text
@@ -143,6 +150,12 @@ def test_duplicate_application_is_one_policy(fixture_client):
     _, quote = setup_case(client)
     a = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
     preview = client.get(f"/api/applications/{a}").json()
+    assert send(
+        client,
+        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+        {"action": "approve", "note": "Synthetic broker review."},
+    ).status_code == 200
+    preview = client.get(f"/api/applications/{a}").json()
     key = str(uuid4())
     payload = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
     first = send(client, f"/api/applications/{a}/submit", payload, key)
@@ -150,6 +163,28 @@ def test_duplicate_application_is_one_policy(fixture_client):
     assert send(client, f"/api/applications/{a}/submit", payload).status_code == 409
     with Session(engine) as db:
         assert len(db.scalars(select(Policy)).all()) == 1
+
+
+def test_broker_review_is_required_before_sandbox_submission(fixture_client):
+    client, _, _ = fixture_client
+    _, quote = setup_case(client)
+    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    preview = client.get(f"/api/applications/{application}").json()
+    body = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
+    assert send(client, f"/api/applications/{application}/submit", body).status_code == 409
+    reviewed = send(
+        client,
+        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+        {"action": "approve", "note": "Terms and tradeoffs reviewed."},
+    )
+    assert reviewed.status_code == 200
+    assert send(client, f"/api/applications/{application}/submit", body).status_code == 422
+    new_preview = client.get(f"/api/applications/{application}").json()
+    assert send(
+        client,
+        f"/api/applications/{application}/submit",
+        {"payload_hash": new_preview["payload_hash"], "declarations_confirmed": True},
+    ).status_code == 200
 
 
 def test_key_reuse_payload_conflict(fixture_client):

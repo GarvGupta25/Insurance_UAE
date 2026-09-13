@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .auth import User, current_user
 from .config import settings
 from .contracts import (
+    BrokerRecommendationReview,
     ConfirmRequest,
     MessageRequest,
     PatchRequest,
@@ -40,6 +41,8 @@ from .models import (
     Policy,
     Quote,
     Receipt,
+    Recommendation,
+    ReviewDecision,
     Run,
     ServicingEvent,
     SourceSnapshot,
@@ -470,8 +473,32 @@ def prepare_application(
             "mode": "synthetic_demo",
             "prepared_at": now().isoformat(),
         }
+        certainty = "tradeoff" if item["gaps"] else "missing_terms" if item["unknowns"] else "clear"
+        recommendation = Recommendation(
+            owner_id=user.id,
+            case_id=quote.case_id,
+            quote_id=quote.id,
+            profile_version=row.version,
+            proposed_plan_id=body.plan_id,
+            certainty=certainty,
+            summary={
+                "selected": item,
+                "alternatives": [candidate for candidate in quote.snapshot["items"] if candidate["plan"]["id"] != body.plan_id],
+                "decision_brief": {
+                    "requested_decision": "Approve the recommended demo plan for submission.",
+                    "main_uncertainty": item["unknowns"][0] if item["unknowns"] else None,
+                    "next_action": "Review the plan comparison and approve or change the recommendation.",
+                },
+            },
+        )
+        db.add(recommendation)
+        db.flush()
         application = Application(
-            owner_id=user.id, quote_id=quote.id, snapshot=snapshot, payload_hash=digest(snapshot)
+            owner_id=user.id,
+            quote_id=quote.id,
+            recommendation_id=recommendation.id,
+            snapshot=snapshot,
+            payload_hash=digest(snapshot),
         )
         db.add(application)
         db.flush()
@@ -490,8 +517,92 @@ def application_detail(
         "quote_id": row.quote_id,
         "status": row.status,
         "payload_hash": row.payload_hash,
+        "recommendation_id": row.recommendation_id,
         **row.snapshot,
     }
+
+
+@app.get("/api/broker/recommendations")
+def broker_recommendations(user: User = Depends(current_user), db: Session = Depends(session)):
+    rows = db.scalars(
+        select(Recommendation)
+        .where(Recommendation.owner_id == user.id)
+        .order_by(Recommendation.created_at.desc())
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "case_id": row.case_id,
+            "quote_id": row.quote_id,
+            "proposed_plan_id": row.proposed_plan_id,
+            "status": row.status,
+            "certainty": row.certainty,
+            "summary": row.summary,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/broker/recommendations/{recommendation_id}/review")
+def review_recommendation(
+    recommendation_id: str,
+    body: BrokerRecommendationReview,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    recommendation = own(db, Recommendation, recommendation_id, user, lock=True)
+
+    def action():
+        if recommendation.status != "pending_review":
+            raise HTTPException(409, "This recommendation has already been reviewed.")
+        quote = own(db, Quote, recommendation.quote_id, user)
+        selected_plan_id = body.selected_plan_id or recommendation.proposed_plan_id
+        selected = next((item for item in quote.snapshot["items"] if item["plan"]["id"] == selected_plan_id), None)
+        if not selected or selected["status"] != "supported":
+            raise HTTPException(422, "A broker can only approve a currently supported plan.")
+        before = {"plan_id": recommendation.proposed_plan_id, "status": recommendation.status}
+        recommendation.proposed_plan_id = selected_plan_id
+        recommendation.status = "approved"
+        application = db.scalar(
+            select(Application).where(Application.recommendation_id == recommendation.id).with_for_update()
+        )
+        if not application:
+            raise HTTPException(409, "The prepared application is unavailable.")
+        application.status = "ready_for_confirmation"
+        application.snapshot = {
+            **application.snapshot,
+            "plan": selected["plan"],
+            "broker_review": {"action": body.action, "note": body.note, "approved_plan_id": selected_plan_id},
+        }
+        application.payload_hash = digest(application.snapshot)
+        review = ReviewDecision(
+            owner_id=user.id,
+            recommendation_id=recommendation.id,
+            action=body.action,
+            note=body.note,
+            before=before,
+            after={"plan_id": selected_plan_id, "status": "approved"},
+        )
+        db.add(review)
+        db.add(
+            Audit(
+                owner_id=user.id,
+                action="recommendation_reviewed",
+                subject_id=recommendation.id,
+                details={"action": body.action, "plan_id": selected_plan_id},
+            )
+        )
+        return {"recommendation_id": recommendation.id, "application_id": application.id, "status": "approved"}
+
+    return command(
+        db,
+        user,
+        idempotency_key,
+        {"action": "review_recommendation", "recommendation": recommendation_id, **body.model_dump()},
+        action,
+    )
 
 
 @app.post("/api/applications/{application_id}/submit")
@@ -510,7 +621,10 @@ def submit_application(
                 422, "Review the exact application and confirm the declarations before submitting."
             )
         if application.status != "ready_for_confirmation":
-            raise HTTPException(409, "This application has already been submitted.")
+            raise HTTPException(409, "This application needs an approved broker recommendation before submission.")
+        recommendation = own(db, Recommendation, application.recommendation_id, user)
+        if recommendation.status != "approved":
+            raise HTTPException(409, "The selected recommendation is not approved.")
         if application.snapshot["profile_version"] != profile(db, user).version:
             raise HTTPException(409, "Your information changed. Prepare a new application.")
         if (now() - datetime.fromisoformat(application.snapshot["prepared_at"])).total_seconds() > 1800:

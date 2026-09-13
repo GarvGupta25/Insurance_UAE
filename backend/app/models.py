@@ -74,7 +74,8 @@ class Quote(Owned, Base):
 class Application(Owned, Base):
     __tablename__ = "applications"
     quote_id: Mapped[str] = mapped_column(ForeignKey("quotes.id"))
-    status: Mapped[str] = mapped_column(String(40), default="ready_for_confirmation")
+    recommendation_id: Mapped[str | None] = mapped_column(ForeignKey("recommendations.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="awaiting_broker_review")
     snapshot: Mapped[dict] = mapped_column(JSON)
     payload_hash: Mapped[str] = mapped_column(String(64))
 
@@ -141,6 +142,27 @@ class Audit(Owned, Base):
     action: Mapped[str] = mapped_column(String(60))
     subject_id: Mapped[str] = mapped_column(String(36))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Recommendation(Owned, Base):
+    __tablename__ = "recommendations"
+    case_id: Mapped[str] = mapped_column(ForeignKey("shopping_cases.id"), index=True)
+    quote_id: Mapped[str] = mapped_column(ForeignKey("quotes.id"))
+    profile_version: Mapped[int]
+    proposed_plan_id: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(40), default="pending_review", index=True)
+    certainty: Mapped[str] = mapped_column(String(32), default="clear")
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ReviewDecision(Owned, Base):
+    __tablename__ = "review_decisions"
+    recommendation_id: Mapped[str | None] = mapped_column(ForeignKey("recommendations.id"), nullable=True)
+    servicing_event_id: Mapped[str | None] = mapped_column(ForeignKey("servicing_events.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(32))
+    note: Mapped[str] = mapped_column(String(2000), default="")
+    before: Mapped[dict] = mapped_column(JSON, default=dict)
+    after: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class ServicingEvent(Owned, Base):

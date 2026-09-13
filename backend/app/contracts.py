@@ -175,3 +175,17 @@ class ServicingRequest(BaseModel):
         if getattr(self, expected) is None:
             raise ValueError(f"{expected.replace('_', ' ')} is required for this request.")
         return self
+
+
+class BrokerRecommendationReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["approve", "edit"]
+    selected_plan_id: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    note: Annotated[str, Field(max_length=2000)] = ""
+
+    @model_validator(mode="after")
+    def edited_recommendation_has_a_plan(self):
+        if self.action == "edit" and not self.selected_plan_id:
+            raise ValueError("Choose the plan to recommend.")
+        return self

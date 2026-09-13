@@ -1,5 +1,37 @@
 ALTER TABLE public.policies ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
+CREATE TABLE public.recommendations (
+    id VARCHAR(36) PRIMARY KEY,
+    owner_id VARCHAR(36) NOT NULL,
+    case_id VARCHAR(36) NOT NULL REFERENCES public.shopping_cases(id),
+    quote_id VARCHAR(36) NOT NULL REFERENCES public.quotes(id),
+    profile_version INTEGER NOT NULL,
+    proposed_plan_id VARCHAR(80) NOT NULL,
+    status VARCHAR(40) NOT NULL,
+    certainty VARCHAR(32) NOT NULL,
+    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+CREATE INDEX ix_recommendations_owner_status ON public.recommendations(owner_id, status);
+ALTER TABLE public.recommendations ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.recommendations FROM anon, authenticated;
+
+ALTER TABLE public.applications ADD COLUMN IF NOT EXISTS recommendation_id VARCHAR(36) REFERENCES public.recommendations(id);
+
+CREATE TABLE public.review_decisions (
+    id VARCHAR(36) PRIMARY KEY,
+    owner_id VARCHAR(36) NOT NULL,
+    recommendation_id VARCHAR(36) REFERENCES public.recommendations(id),
+    servicing_event_id VARCHAR(36),
+    action VARCHAR(32) NOT NULL,
+    note VARCHAR(2000) NOT NULL DEFAULT '',
+    before JSONB NOT NULL DEFAULT '{}'::jsonb,
+    after JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+ALTER TABLE public.review_decisions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.review_decisions FROM anon, authenticated;
+
 CREATE TABLE public.servicing_events (
     id VARCHAR(36) PRIMARY KEY,
     owner_id VARCHAR(36) NOT NULL,

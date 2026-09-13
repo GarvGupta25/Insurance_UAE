@@ -26,9 +26,15 @@ def create_policy(client):
         "payment_frequency": "annual",
     }
     assert client.patch("/api/me/profile", json={"expected_version": profile["version"], "changes": facts}).status_code == 200
-    case = post(client, "/api/cases", {}) .json()["id"]
+    case = post(client, "/api/cases", {}).json()["id"]
     quote = post(client, f"/api/cases/{case}/quotes", {}).json()["id"]
     application = post(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    preview = client.get(f"/api/applications/{application}").json()
+    assert post(
+        client,
+        f"/api/broker/recommendations/{preview['recommendation_id']}/review",
+        {"action": "approve", "note": "Synthetic broker review."},
+    ).status_code == 200
     preview = client.get(f"/api/applications/{application}").json()
     return post(client, f"/api/applications/{application}/submit", {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}).json()["policy_id"]
 
