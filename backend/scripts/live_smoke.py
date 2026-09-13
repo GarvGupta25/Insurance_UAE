@@ -169,6 +169,34 @@ def main():
             {**operation, "expected_policy_version": servicing_preview["policy_version"]},
         )
         assert servicing["decision"]["plan_pays_fils"] == 119000
+        denied = request(client, "POST", f"{api}/policies/{policy}/servicing", token, {
+            "event_id": "SMOKE-CLM-NET", "kind": "claim", "policy_month": 1,
+            "benefit_class": "general", "provider_tier": "top_tier_private_hospital",
+            "billed_amount": 6000,
+        })
+        assert denied["decision"]["reason_code"] == "provider_out_of_network"
+        evidence = "Reviewed local fixture registration confirms restricted-network membership."
+        appeal = request(client, "POST", f"{api}/policies/{policy}/appeals", token, {
+            "appeal_id": "SMOKE-APP-NET", "contested_event_id": "SMOKE-CLM-NET",
+            "statement": "This facility has a separate network registration.", "evidence": [evidence],
+        })
+        appeal_id = appeal["appeal"]["id"]
+        assert any(item["id"] == appeal_id for item in request(client, "GET", api + "/broker/appeals", broker_token))
+        reviewed = request(client, "POST", f"{api}/broker/appeals/{appeal_id}/review", broker_token, {
+            "action": "overturn", "note": "Checked the separate synthetic network registration.",
+            "verified_network_membership": {
+                "provider_name": "Local Fixture Clinic", "network_tier": "restricted",
+                "evidence_reference": evidence,
+            },
+        })
+        assert reviewed["effective_decision"]["plan_pays_fils"] == 420000
+        assert reviewed["ledger"]["annual_paid_fils"] == 539000
+        history = request(client, "GET", f"{api}/policies/{policy}", token)["servicing"]
+        claim_history = [item for item in history if item["event_id"] == "SMOKE-CLM-NET"]
+        assert (claim_history[0]["record_type"], claim_history[0]["outcome"]) == ("decision", "denied")
+        assert (claim_history[-1]["record_type"], claim_history[-1]["outcome"], claim_history[-1]["plan_pays_fils"]) == (
+            "revision", "covered", 420000,
+        )
         order = request(
             client, "POST", f"{api}/instalments/{policy_view['instalments'][0]['id']}/payment-order", token
         )
@@ -179,7 +207,7 @@ def main():
         final = request(client, "GET", f"{api}/policies/{policy}", token)
         assert final["paid_fils"] == final["instalments"][0]["amount"]
     print(
-        "Local authenticated smoke test passed: member, assigned broker, quote, approval, policy, claim and sandbox receipt."
+        "Local authenticated smoke test passed: member, assigned broker, quote, approval, policy, claim, appeal replay and sandbox receipt."
     )
 
 
