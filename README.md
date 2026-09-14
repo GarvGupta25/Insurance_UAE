@@ -10,6 +10,7 @@ It never presents a fictional plan as real cover. A quote is indicative; a sandb
 - Three-stage conversational intake plus a full editable profile.
 - Optional identity extraction from JPG/PNG/PDF, with reviewed provisional fields; raw documents are not retained.
 - Versioned fictional catalogue, deterministic matching, a downloadable PDF quotation and visible waiting-period/network tradeoffs.
+- Guided chat that can finish a reviewed profile and generate the indicative quote; a saved, drag-to-explore financial planner uses the same fictional terms for premium, contribution and outpatient-cost illustrations. See [docs/AGENTIC_SHOPPING_FINANCE.md](docs/AGENTIC_SHOPPING_FINANCE.md).
 - Two application mappings, snapshot hashing, explicit declaration confirmation and an in-app carrier sandbox.
 - Portfolio, frozen policy terms, a monthly/annual simulated schedule, idempotent local payments and an optional Razorpay test adapter.
 - Broker review before a prepared application can be confirmed, including the documented fit brief and supported-plan edits.
