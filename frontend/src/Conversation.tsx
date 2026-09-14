@@ -1,28 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { ArrowUp, Sparkles, Check, MessageCircle } from 'lucide-react';
 import { api, post } from './api';
 import { VoiceInput, ReadAloud } from './Voice';
 
-export function Conversation({ caseId, profile, voice, policyId }: { caseId: string; profile: any; voice: boolean; policyId?: string }) {
-  const query = useQueryClient(); const [text, setText] = useState(''); const [modality, setModality] = useState('text'); const [transcript, setTranscript] = useState<string | null>(null);
+export function Conversation({ caseId, profile, voice, policyId, quoteId }: { caseId: string; profile: any; voice: boolean; policyId?: string; quoteId?: string }) {
+  const query = useQueryClient(); const navigate = useNavigate(); const [text, setText] = useState(''); const [modality, setModality] = useState('text'); const [transcript, setTranscript] = useState<string | null>(null);
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [dismissed, setDismissed] = useState<string[]>([]);
   const end = useRef<HTMLDivElement>(null);
   const { data, error: loadError } = useQuery({ queryKey: ['case', caseId], queryFn: () => api(`/api/cases/${caseId}`), refetchInterval: query => query.state.data?.active_runs?.length ? 1500 : false });
   useEffect(() => { end.current?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }, [data?.messages?.length]);
   async function send(event: React.FormEvent) {
     event.preventDefault(); if (!text.trim()) return; setBusy(true); setError('');
-    try { await post(`/api/cases/${caseId}/messages`, { text, modality, policy_id: policyId }); setText(''); setModality('text'); await query.invalidateQueries({ queryKey: ['case', caseId] }); }
+    try { await post(`/api/cases/${caseId}/messages`, { text, modality, policy_id: policyId, quote_id: quoteId, financial_inputs: quoteId ? query.getQueryData(['financial-draft', quoteId]) : undefined }); setText(''); setModality('text'); await query.invalidateQueries({ queryKey: ['case', caseId] }); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function accept(message: any) {
     setBusy(true); setError('');
-    try { await api('/api/me/profile', { method: 'PATCH', body: JSON.stringify({ expected_version: message.details.profile_version, changes: message.details.patch, source_message_id: message.details.source_message_id }) }); setDismissed(d => [...d, message.id]); await query.invalidateQueries({ queryKey: ['profile'] }); }
+    try { const updated = await api('/api/me/profile', { method: 'PATCH', body: JSON.stringify({ expected_version: message.details.profile_version, changes: message.details.patch, source_message_id: message.details.source_message_id }) }); setDismissed(d => [...d, message.id]); await query.invalidateQueries({ queryKey: ['profile'] }); if (updated.readiness.ready && !policyId && !quoteId) { const quotation = await post(`/api/cases/${caseId}/quotes`); navigate(`/app/quotes/${quotation.id}`); } }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   return <section className="conversation">
     <div className="conversation-header"><span className="assistant-avatar"><Sparkles size={21}/></span><div><strong>Your Helm assistant</strong><small>Here to make the details clearer</small></div><span className="status-dot"/></div>
-    <div className="messages" aria-label="Conversation history"><div className="message assistant"><span className="eyebrow">LET’S START WITH YOU</span><p>{policyId ? 'Ask a question about this policy, its saved terms or its payment schedule.' : 'Tell me what you need from your health cover. We’ll keep the details together, so you only explain things once.'}</p><p>{!policyId && profile.readiness.question}</p></div>
+    <div className="messages" aria-label="Conversation history"><div className="message assistant"><span className="eyebrow">{quoteId ? 'EXPLORE THE TRADE-OFF' : 'LET’S START WITH YOU'}</span><p>{quoteId ? 'Tell me your monthly premium budget, an outpatient spending amount to model, or which cost trade-off matters most. I’ll recalculate from the saved fictional quote.' : policyId ? 'Ask a question about this policy, its saved terms or its payment schedule.' : 'Tell me what you need from your health cover. We’ll keep the details together, so you only explain things once.'}</p>{!policyId && !quoteId && <p>{profile.readiness.question}</p>}</div>
       {data?.messages.map((message: any) => <div className={`message ${message.role}`} key={message.id}><span className="message-label">{message.role === 'user' ? 'You' : 'Helm'}{message.modality === 'voice' ? ' · from voice' : ''}</span><p>{message.text}</p>{message.role === 'assistant' && <ReadAloud text={message.text}/>}
         {message.details?.patch && Object.keys(message.details.patch).length > 0 && !dismissed.includes(message.id) && <div className="fact-review"><strong>Check what I understood</strong><dl>{Object.entries(message.details.patch).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') : String(value)}</dd></div>)}</dl><div className="actions"><button disabled={busy || message.details.profile_version !== profile.version} onClick={() => accept(message)}><Check size={15}/> Save these details</button><button className="quiet" onClick={() => setDismissed(d => [...d, message.id])}>Discard</button></div>{message.details.profile_version !== profile.version && <small>Your profile has changed. Use the editor to apply any remaining corrections.</small>}</div>}</div>)}
       {data?.active_runs?.length > 0 && <div className="processing" role="status"><span className="typing-dots">•••</span> Working on your answer. Your saved details are safe.</div>}

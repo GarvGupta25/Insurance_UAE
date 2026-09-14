@@ -7,6 +7,7 @@ import { ProfileEditor } from './ProfileEditor';
 import { Conversation } from './Conversation';
 import { ReadAloud } from './Voice';
 import { Providers } from './Providers';
+import { FinancialPlanner } from './FinancialPlanner';
 
 export function Loading() { return <div className="loading" role="status">Loading your workspace…</div>; }
 export function ErrorView({ error }: { error: unknown }) { return <div className="error" role="alert">{error instanceof Error ? error.message : 'This page could not load. Please try again.'}</div>; }
@@ -43,6 +44,7 @@ export function Intake({ config }: { config: Config }) {
 export function QuotePage() {
   const { quoteId = '' } = useParams(); const navigate = useNavigate(); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const quote = useQuery({ queryKey: ['quote', quoteId], queryFn: () => api(`/api/quotes/${quoteId}`) });
+  const profile = useQuery({ queryKey: ['profile'], queryFn: () => api('/api/me/profile') });
   const sources = useQuery({ queryKey: ['public-sources'], queryFn: () => api('/api/sources') });
   async function prepare(id: string) { setBusy(true); setError(''); try { const result = await post('/api/applications/prepare', { quote_id: quoteId, plan_id: id }); navigate(`/app/applications/${result.id}`); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   if (quote.isLoading) return <Loading/>; if (quote.error) return <ErrorView error={quote.error}/>; const data = quote.data;
@@ -51,7 +53,7 @@ export function QuotePage() {
     {data.classification && <section className="surface"><h2>Needs considered</h2><p className="muted">{data.classification.cohort.replaceAll('_', ' ')} · age band {data.classification.age_band.replaceAll('_', ' ')}. These labels help explain the comparison; they do not change premiums or decide eligibility.</p>{data.classification.flags.map((flag: any) => <p key={flag.code}><strong>{flag.explanation}</strong> {flag.review_relevance} <small className="source-label">From saved {flag.source.replaceAll('_', ' ')}.</small></p>)}</section>}
     {data.stale && <div className="notice">Your profile or catalogue changed. Return to your profile and generate a fresh quote before selecting a plan.</div>}
     {!data.recommended_plan_id && <div className="notice">No plan meets all known requirements yet. Review the gaps below and clarify your needs; no unsuitable plan is selected automatically.</div>}
-    {error && <ErrorView error={new Error(error)}/>}<div className="plan-grid">{data.items.map((item: any) => { const p = item.plan; const recommended = p.id === data.recommended_plan_id; return <article className={`plan-card ${recommended ? 'recommended' : ''}`} key={p.id}>
+    {error && <ErrorView error={new Error(error)}/>}<FinancialPlanner quoteId={quoteId} stale={data.stale} onChoose={id => void prepare(id)}/>{profile.data && <div className="financial-chat"><Conversation caseId={data.case_id} profile={profile.data} voice={false} quoteId={quoteId}/></div>}<div className="plan-grid">{data.items.map((item: any) => { const p = item.plan; const recommended = p.id === data.recommended_plan_id; return <article className={`plan-card ${recommended ? 'recommended' : ''}`} key={p.id}>
       <div className="plan-top"><span className="eyebrow">{p.network.toUpperCase()} NETWORK</span>{recommended && <span className="badge">Best fit here</span>}</div><h2>{p.name}</h2><div className="plan-price">{aed(item.premium_fils)}<small>/ year</small></div><p className="muted">{aed(item.monthly_budget_equivalent_fils)} monthly budget equivalent</p><hr/>
       <dl className="term-list"><div><dt>Annual cover limit</dt><dd>{aed(p.annual_limit * 100)}</dd></div><div><dt>Deductible</dt><dd>{aed(p.deductible * 100)}</dd></div><div><dt>Member copay</dt><dd>{p.outpatient_copay_pct}%</dd></div><div><dt>Maternity wait</dt><dd>{p.maternity.covered ? `${p.maternity.waiting_period_months} months` : 'Excluded'}</dd></div><div><dt>Existing-condition wait</dt><dd>{p.chronic_preexisting.covered ? `${p.chronic_preexisting.waiting_period_months} months` : 'Excluded'}</dd></div></dl>
       <div className="plan-reasons"><strong>{recommended ? 'Why this fits' : 'The tradeoff'}</strong>{item.reasons.map((reason: string) => <p key={reason}><Check size={15}/>{reason}</p>)}{[...item.tradeoffs || [], ...item.gaps, ...item.unknowns].map((reason: string) => <p className="gap" key={reason}><CircleAlert size={15}/>{reason}</p>)}</div>
