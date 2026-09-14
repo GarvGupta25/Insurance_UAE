@@ -23,6 +23,8 @@ It never presents a fictional plan as real cover. A quote is indicative; a sandb
 
 ## Run locally
 
+For a quick, interactive branch preview without Docker or Supabase, follow [docs/LOCAL_PREVIEW.md](docs/LOCAL_PREVIEW.md). It runs against an ignored SQLite demo database with synthetic member and broker roles. The setup below is for the full Supabase-backed development environment.
+
 Requirements: Node 22+, Python 3.12, `uv`, Docker Desktop and the local Supabase CLI dependency installed by this repository.
 
 1. At the repository root run `npm install`, then `npx supabase start --ignore-health-check` and `npx supabase db reset --no-seed`. The ignore-health-check option is documented here because the current Windows CLI can report a profile-file warning while all required local services start.

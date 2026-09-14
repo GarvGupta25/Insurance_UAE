@@ -10,6 +10,13 @@ import { BrokerWorkspace } from './Broker';
 import './styles.css';
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+const localPreview = import.meta.env.VITE_LOCAL_PREVIEW === '1';
+function previewSession(): Session | null {
+  if (!localPreview) return null;
+  const broker = sessionStorage.getItem('helm-preview-role') === 'broker';
+  return { user: { id: broker ? '10000000-0000-4000-8000-000000000002' : '10000000-0000-4000-8000-000000000001',
+    email: broker ? 'demo-broker@helm.local' : 'demo-member@helm.local' } } as Session;
+}
 
 function Brand() { return <Link to="/" className="brand" aria-label="Helm AI home"><span><Compass size={25}/></span>helm<span className="brand-ai">ai</span></Link>; }
 function Landing() {
@@ -50,12 +57,13 @@ function Shell({ session }: { session: Session | null }) {
   const [open, setOpen] = useState(false); const navigate = useNavigate();
   const access = useQuery({ queryKey: ['access', session?.user.id], queryFn: () => api<{ role: 'member' | 'broker' }>('/api/me/access'), enabled: !!session });
   if (!session) return <Navigate to="/login" replace/>;
-  async function logout() { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); await auth?.auth.signOut(); client.clear(); navigate('/'); }
-  return <div className="app-shell"><a className="skip-link" href="#workspace">Skip to workspace</a><aside className={`sidebar ${open ? 'open' : ''}`}><Brand/><span className="nav-caption">YOUR WORKSPACE</span><nav><NavLink end to="/app" onClick={() => setOpen(false)}><LayoutDashboard size={19}/> Overview</NavLink><Link to="/app" onClick={() => setOpen(false)}><ShieldCheck size={19}/> Policies & cover</Link>{access.data?.role === "broker" && <NavLink to="/app/broker" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Broker workspace</NavLink>}<Link to="/#questions"><MessageIcon/> About this demo</Link></nav><div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={22}/><strong>Clarity, not guesswork.</strong><p>Your choices stay yours. Review the details before every submission.</p></div><button className="quiet" onClick={logout}><LogOut size={17}/> Sign out</button></div></aside><div className="app-content"><header className="workspace-header"><button className="mobile-menu quiet" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}><Menu size={23}/></button><span>Individual health insurance <span className="header-divider">/</span> UAE</span><div><span className="badge neutral">Demo workspace</span><span className="user-avatar" title={session.user.email}>{session.user.email?.[0]?.toUpperCase() || 'H'}</span></div></header><main id="workspace"><Outlet/></main><footer className="workspace-footer">Helm AI · All insurance products and transactions in this workspace are demonstrations.</footer></div></div>;
+  async function logout() { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); if (localPreview) { sessionStorage.setItem('helm-preview-role', 'member'); window.location.assign('/'); return; } await auth?.auth.signOut(); client.clear(); navigate('/'); }
+  function switchPreviewRole() { sessionStorage.setItem('helm-preview-role', access.data?.role === 'broker' ? 'member' : 'broker'); window.location.assign(access.data?.role === 'broker' ? '/app' : '/app/broker'); }
+  return <div className="app-shell"><a className="skip-link" href="#workspace">Skip to workspace</a><aside className={`sidebar ${open ? 'open' : ''}`}><Brand/><span className="nav-caption">YOUR WORKSPACE</span><nav><NavLink end to="/app" onClick={() => setOpen(false)}><LayoutDashboard size={19}/> Overview</NavLink><Link to="/app" onClick={() => setOpen(false)}><ShieldCheck size={19}/> Policies & cover</Link>{access.data?.role === "broker" && <NavLink to="/app/broker" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Broker workspace</NavLink>}<Link to="/#questions"><MessageIcon/> About this demo</Link></nav><div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={22}/><strong>Clarity, not guesswork.</strong><p>Your choices stay yours. Review the details before every submission.</p></div>{localPreview && <button className="quiet" onClick={switchPreviewRole}><ClipboardCheck size={17}/> Switch to {access.data?.role === 'broker' ? 'member' : 'broker'} demo</button>}<button className="quiet" onClick={logout}><LogOut size={17}/> {localPreview ? 'Back to start' : 'Sign out'}</button></div></aside><div className="app-content"><header className="workspace-header"><button className="mobile-menu quiet" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}><Menu size={23}/></button><span>Individual health insurance <span className="header-divider">/</span> UAE</span><div><span className="badge neutral">{localPreview ? 'Local synthetic preview' : 'Demo workspace'}</span><span className="user-avatar" title={session.user.email}>{session.user.email?.[0]?.toUpperCase() || 'H'}</span></div></header><main id="workspace"><Outlet/></main><footer className="workspace-footer">Helm AI · All insurance products and transactions in this workspace are demonstrations.</footer></div></div>;
 }
 function MessageIcon() { return <Layers3 size={19}/>; }
 function App() {
-  const config = useQuery({ queryKey: ['config'], queryFn: () => api<Config>('/api/config') }); const [session, setSession] = useState<Session | null>(null); const [ready, setReady] = useState(false);
+  const config = useQuery({ queryKey: ['config'], queryFn: () => api<Config>('/api/config') }); const [session, setSession] = useState<Session | null>(previewSession); const [ready, setReady] = useState(false);
   useEffect(() => {
     if (!config.data) return; configureAuth(config.data);
     if (!auth) { setReady(true); return; }

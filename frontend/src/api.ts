@@ -11,6 +11,7 @@ export class ApiError extends Error {
 export async function api<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const session = auth ? (await auth.auth.getSession()).data.session : null;
   const headers = new Headers(options.headers);
+  if (import.meta.env.VITE_LOCAL_PREVIEW === '1') headers.set('X-Preview-Role', sessionStorage.getItem('helm-preview-role') === 'broker' ? 'broker' : 'member');
   if (session) headers.set('Authorization', `Bearer ${session.access_token}`);
   if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (options.method === 'POST' && !headers.has('Idempotency-Key')) headers.set('Idempotency-Key', crypto.randomUUID());
@@ -25,7 +26,10 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
 export const post = <T = any>(path: string, body: unknown = {}) => api<T>(path, { method: 'POST', body: JSON.stringify(body) });
 export async function downloadQuote(id: string) {
   const session = auth ? (await auth.auth.getSession()).data.session : null;
-  const response = await fetch(`/api/quotes/${id}/download`, { headers: session ? { Authorization: `Bearer ${session.access_token}` } : {} });
+  const headers = new Headers();
+  if (import.meta.env.VITE_LOCAL_PREVIEW === '1') headers.set('X-Preview-Role', sessionStorage.getItem('helm-preview-role') === 'broker' ? 'broker' : 'member');
+  if (session) headers.set('Authorization', `Bearer ${session.access_token}`);
+  const response = await fetch(`/api/quotes/${id}/download`, { headers });
   if (!response.ok) throw new Error('The PDF could not be downloaded. Please retry.');
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a'); link.href = url; link.download = `helm-quote-${id}.pdf`; link.click();
