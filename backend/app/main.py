@@ -286,6 +286,19 @@ def send_message(
 ):
     own(db, Case, case_id, user)
     context = {"source_ids": [p["id"] for p in plans()], "plans": plans()}
+    if body.quote_id:
+        quote = own(db, Quote, body.quote_id, user)
+        if quote.case_id != case_id:
+            raise HTTPException(404, "This quote is unavailable in the selected case.")
+        latest = db.scalar(
+            select(FinancialScenario)
+            .where(FinancialScenario.quote_id == quote.id, FinancialScenario.owner_id == user.id)
+            .order_by(FinancialScenario.created_at.desc())
+            .limit(1)
+        )
+        context = {"source_ids": [item["plan"]["id"] for item in quote.snapshot["items"]],
+                   "quote": quote.snapshot,
+                   "financial_inputs": body.financial_inputs.model_dump() if body.financial_inputs else latest.inputs if latest else None}
     if body.policy_id:
         policy = own(db, Policy, body.policy_id, user)
         context = {"source_ids": [policy.id], "policy": policy.snapshot, "status": policy.status}
@@ -485,6 +498,19 @@ def list_financial_scenarios(quote_id: str, user: User = Depends(current_user), 
         {"id": row.id, "inputs": row.inputs, "result": row.result, "created_at": row.created_at.isoformat()}
         for row in rows
     ]}
+
+
+@app.post("/api/quotes/{quote_id}/financial-preview")
+def preview_financial_scenario(
+    quote_id: str,
+    body: FinancialScenarioRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+):
+    quote = own(db, Quote, quote_id, user)
+    if quote.profile_version != profile(db, user).version or quote.snapshot["catalogue_hash"] != digest(plans()):
+        raise HTTPException(409, "This quote is stale. Generate a current quotation before planning.")
+    return financial_scenario(quote.snapshot, **body.model_dump())
 
 
 @app.post("/api/quotes/{quote_id}/financial-scenarios")

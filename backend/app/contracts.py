@@ -155,17 +155,19 @@ class PatchRequest(BaseModel):
     source_message_id: str | None = None
 
 
-class MessageRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
-    modality: Literal["text", "voice"] = "text"
-    policy_id: str | None = None
-
-
 class FinancialScenarioRequest(BaseModel):
     monthly_budget_aed: int = Field(ge=0, le=100000)
     outpatient_spend_aed: int = Field(ge=0, le=1000000)
     contribution_aed: int = Field(ge=0, le=1000000)
     priority: Literal["lower_premium", "lower_member_cost", "balanced"]
+
+
+class MessageRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    modality: Literal["text", "voice"] = "text"
+    policy_id: str | None = None
+    quote_id: str | None = None
+    financial_inputs: FinancialScenarioRequest | None = None
 
 
 class PrepareRequest(BaseModel):

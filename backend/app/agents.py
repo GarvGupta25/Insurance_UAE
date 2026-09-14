@@ -8,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .config import settings
 from .contracts import Facts, readiness
+from .financial import financial_scenario
 
 
 class AgentState(TypedDict, total=False):
@@ -57,8 +58,50 @@ def guided_answer(field: str, text: str):
     return None
 
 
+def financial_reply(text: str, facts: dict, context: dict) -> dict:
+    """Answer quoted-plan trade-offs by calling the shared scenario calculator."""
+    previous = context.get("financial_inputs") or {}
+    inputs = {
+        "monthly_budget_aed": previous.get("monthly_budget_aed", round((facts.get("annual_budget") or 12000) / 12)),
+        "outpatient_spend_aed": previous.get("outpatient_spend_aed", 3000),
+        "contribution_aed": previous.get("contribution_aed", facts.get("contribution_aed") or 0),
+        "priority": previous.get("priority", facts.get("cost_sharing") or "balanced"),
+    }
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in ("lower premium", "lowest premium", "cheapest", "spend less on premium")):
+        inputs["priority"] = "lower_premium"
+    elif any(phrase in lowered for phrase in ("out of pocket", "lower copay", "lower member cost", "when i need care")):
+        inputs["priority"] = "lower_member_cost"
+    elif "balanced" in lowered or "overall cost" in lowered:
+        inputs["priority"] = "balanced"
+    patterns = {
+        "monthly_budget_aed": [r"(?:monthly budget|budget per month|budget of)\s*(?:is\s*)?(?:aed\s*)?(\d{1,6})",
+                               r"(?:aed\s*)?(\d{1,6})\s*(?:per month|monthly budget)"],
+        "outpatient_spend_aed": [r"(?:outpatient (?:spend|care|bills?))\s*(?:of\s*)?(?:aed\s*)?(\d{1,6})",
+                                 r"(?:aed\s*)?(\d{1,6})\s*(?:on outpatient|outpatient spend)"],
+        "contribution_aed": [r"(?:contribution|contribute)\s*(?:of\s*)?(?:aed\s*)?(\d{1,6})",
+                             r"(?:aed\s*)?(\d{1,6})\s*(?:contribution|from my employer|from my sponsor)"],
+    }
+    for field, expressions in patterns.items():
+        for expression in expressions:
+            match = re.search(expression, lowered)
+            if match:
+                inputs[field] = int(match.group(1))
+                break
+    if inputs["monthly_budget_aed"] > 100000 or inputs["outpatient_spend_aed"] > 1000000 or inputs["contribution_aed"] > 1000000:
+        return {"reply": "That amount is outside this fictional planning tool. Try a smaller AED amount.",
+                "patch": {}, "mode": "financial_guided", "sources": []}
+    report = financial_scenario(context["quote"], **inputs)
+    follow_up = " What matters more to you next: a lower premium, lower cost when care happens, or balanced annual cost?"
+    return {"reply": report["reply"] + follow_up, "patch": {}, "mode": "financial_guided",
+            "sources": [report["recommended_plan_id"]] if report["recommended_plan_id"] else [],
+            "financial_inputs": inputs, "financial_result": report}
+
+
 def interpret(state: AgentState):
     facts = state["facts"]
+    if "quote" in state.get("context", {}):
+        return {"result": financial_reply(state["text"], facts, state["context"])}
     next_step = readiness(facts)
     if not settings().groq_api_key:
         field = next_step["missing"][0] if next_step["missing"] else None
