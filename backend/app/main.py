@@ -22,6 +22,7 @@ from .contracts import (
     BrokerReassessmentReview,
     BrokerRecommendationReview,
     ConfirmRequest,
+    FinancialScenarioRequest,
     MessageRequest,
     PatchRequest,
     PrepareRequest,
@@ -44,12 +45,14 @@ from .domain import (
     plans,
     reassess_fit,
 )
+from .financial import financial_scenario
 from .models import (
     Application,
     Audit,
     BrokerAssignment,
     Case,
     Document,
+    FinancialScenario,
     Installment,
     LedgerProjection,
     Message,
@@ -467,6 +470,44 @@ def download_quote(quote_id: str, user: User = Depends(current_user), db: Sessio
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="helm-quote-{quote.id}.pdf"'},
     )
+
+
+@app.get("/api/quotes/{quote_id}/financial-scenarios")
+def list_financial_scenarios(quote_id: str, user: User = Depends(current_user), db: Session = Depends(session)):
+    own(db, Quote, quote_id, user)
+    rows = db.scalars(
+        select(FinancialScenario)
+        .where(FinancialScenario.quote_id == quote_id, FinancialScenario.owner_id == user.id)
+        .order_by(FinancialScenario.created_at.desc())
+        .limit(10)
+    ).all()
+    return {"items": [
+        {"id": row.id, "inputs": row.inputs, "result": row.result, "created_at": row.created_at.isoformat()}
+        for row in rows
+    ]}
+
+
+@app.post("/api/quotes/{quote_id}/financial-scenarios")
+def create_financial_scenario(
+    quote_id: str,
+    body: FinancialScenarioRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    quote = own(db, Quote, quote_id, user)
+
+    def action():
+        if quote.profile_version != profile(db, user).version or quote.snapshot["catalogue_hash"] != digest(plans()):
+            raise HTTPException(409, "This quote is stale. Generate a current quotation before planning.")
+        inputs = body.model_dump()
+        result = financial_scenario(quote.snapshot, **inputs)
+        row = FinancialScenario(owner_id=user.id, quote_id=quote.id, inputs=inputs, result=result)
+        db.add(row)
+        db.flush()
+        return {"id": row.id, "inputs": inputs, "result": result}
+
+    return command(db, user, idempotency_key, {"action": "financial_scenario", "quote": quote_id, **body.model_dump()}, action)
 
 
 @app.post("/api/applications/prepare")

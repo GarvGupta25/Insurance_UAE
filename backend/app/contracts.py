@@ -161,6 +161,13 @@ class MessageRequest(BaseModel):
     policy_id: str | None = None
 
 
+class FinancialScenarioRequest(BaseModel):
+    monthly_budget_aed: int = Field(ge=0, le=100000)
+    outpatient_spend_aed: int = Field(ge=0, le=1000000)
+    contribution_aed: int = Field(ge=0, le=1000000)
+    priority: Literal["lower_premium", "lower_member_cost", "balanced"]
+
+
 class PrepareRequest(BaseModel):
     quote_id: str
     plan_id: str

@@ -80,6 +80,13 @@ class Quote(Owned, Base):
     snapshot: Mapped[dict] = mapped_column(JSON)
 
 
+class FinancialScenario(Owned, Base):
+    __tablename__ = "financial_scenarios"
+    quote_id: Mapped[str] = mapped_column(ForeignKey("quotes.id"), index=True)
+    inputs: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict] = mapped_column(JSON)
+
+
 class Application(Owned, Base):
     __tablename__ = "applications"
     quote_id: Mapped[str] = mapped_column(ForeignKey("quotes.id"))
