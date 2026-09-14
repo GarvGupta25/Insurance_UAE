@@ -269,6 +269,30 @@ def test_failed_payment_keeps_balance_and_receipts_empty(fixture_client):
     assert result["paid_fils"] == 0 and result["receipts"] == []
 
 
+def test_cancelled_payment_attempt_is_visible_and_can_be_retried(fixture_client):
+    client, owner, engine = fixture_client
+    policy_id, _, _ = setup_policy(client, owner, engine)
+    instalment = client.get(f"/api/policies/{policy_id}").json()["instalments"][0]
+    order = send(client, f"/api/instalments/{instalment['id']}/payment-order").json()
+    assert send(client, f"/api/payment-orders/{order['id']}/simulate", {"result": "cancelled"}).json() == {
+        "status": "cancelled"
+    }
+    policy = client.get(f"/api/policies/{policy_id}").json()
+    assert policy["receipts"] == []
+    assert policy["payment_attempts"] == [
+        {
+            "id": order["id"],
+            "installment_id": instalment["id"],
+            "provider": "simulator",
+            "status": "cancelled",
+            "amount": instalment["amount"],
+            "currency": "AED",
+        }
+    ]
+    retry = send(client, f"/api/instalments/{instalment['id']}/payment-order").json()
+    assert retry["id"] != order["id"] and retry["status"] == "created"
+
+
 def test_profile_history_and_immutable_policy_snapshot(fixture_client):
     client, owner, engine = fixture_client
     policy_id, _, _ = setup_policy(client, owner, engine)

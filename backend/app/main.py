@@ -716,6 +716,11 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
     receipts = db.scalars(
         select(Receipt).where(Receipt.installment_id.in_([r.id for r in rows]), Receipt.owner_id == user.id)
     ).all()
+    payment_attempts = db.scalars(
+        select(PaymentOrder)
+        .where(PaymentOrder.installment_id.in_([r.id for r in rows]), PaymentOrder.owner_id == user.id)
+        .order_by(PaymentOrder.id)
+    ).all()
     servicing = db.scalars(
         select(ServicingEvent)
         .where(ServicingEvent.policy_id == policy.id, ServicingEvent.owner_id == user.id)
@@ -745,6 +750,17 @@ def policy_detail(policy_id: str, user: User = Depends(current_user), db: Sessio
         "receipts": [
             {"id": r.id, "amount": r.amount, "provider": r.provider, "created_at": r.created_at.isoformat()}
             for r in receipts
+        ],
+        "payment_attempts": [
+            {
+                "id": attempt.id,
+                "installment_id": attempt.installment_id,
+                "provider": attempt.provider,
+                "status": attempt.status,
+                "amount": attempt.amount,
+                "currency": attempt.currency,
+            }
+            for attempt in payment_attempts
         ],
         "paid_fils": sum(r.amount for r in receipts),
         "total_fils": sum(r.amount for r in rows),
