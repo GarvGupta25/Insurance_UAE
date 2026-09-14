@@ -36,7 +36,7 @@ export function Intake({ config }: { config: Config }) {
   async function quote() { setBusy(true); setError(''); try { const result = await post(`/api/cases/${caseId}/quotes`); navigate(`/app/quotes/${result.id}`); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   if (profile.isLoading) return <Loading/>; if (profile.error) return <ErrorView error={profile.error}/>;
   return <><div className="page-heading compact"><div><span className="eyebrow">01 / UNDERSTAND YOUR NEEDS</span><h1>Good cover starts with you.</h1><p>Speak naturally, type, or edit your details. We’ll keep everything in one place.</p></div><button disabled={busy || !profile.data.readiness.ready} onClick={quote}>Get quotation <ArrowRight size={17}/></button></div>
-    {!config.ai_available && <div className="notice"><CircleAlert size={18}/><span>AI and voice need a configured Groq key. The profile editor is available; no generated answers are being simulated.</span></div>}
+    {!config.ai_available && <div className="notice"><CircleAlert size={18}/><span>Guided chat is available without an AI key. Answer one question at a time and review each proposed detail before saving. Free-form multi-detail extraction and voice need Groq.</span></div>}
     {error && <ErrorView error={new Error(error)}/>}<div className="intake-layout"><Conversation caseId={caseId} profile={profile.data} voice={config.voice_available}/><ProfileEditor profile={profile.data} onSaved={() => { void query.invalidateQueries({ queryKey: ['profile'] }); }}/></div></>;
 }
 
