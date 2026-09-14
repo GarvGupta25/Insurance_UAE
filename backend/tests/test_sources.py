@@ -35,3 +35,16 @@ def test_research_links_do_not_supply_fictional_plan_terms(fixture_client):
     assert result["items"]
     assert all(item["verification"] == "not_retrieved" for item in result["items"])
     assert all("premium" not in item for item in result["items"])
+
+
+def test_provider_list_works_without_location_and_keeps_demo_provenance(fixture_client):
+    client, _, _ = fixture_client
+    dubai = client.get("/api/providers?plan_id=plan_b&emirate=Dubai")
+    assert dubai.status_code == 200
+    result = dubai.json()
+    assert result["items"]
+    assert all(item["mode"] == "synthetic_demo" for item in result["items"])
+    assert all(item["source"] == "Synthetic provider directory v1" for item in result["items"])
+    manual_fallback = client.get("/api/providers?plan_id=plan_b&emirate=Abu%20Dhabi").json()
+    assert manual_fallback["items"] == []
+    assert "Not a real care directory" in manual_fallback["notice"]
