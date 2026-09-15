@@ -1,0 +1,3 @@
+# Written answers
+
+Groq/LangGraph may propose profile fact patches and explanatory prose; Python deterministically performs eligibility comparisons, pricing, servicing arithmetic, and ledger rebuilds. Recommendations always require broker approval, while routine deterministic servicing is calculated from frozen terms. Cohorts are derived by `domain.classify`; event history is append-only and ledgers are rebuilt from it. Member experiences omit internal routing context; broker experiences include review context. Work is ordered by age, urgency, amount, then stable ID. The core compliance flow was built before polish; remaining roadmap work is accessibility and notification polish.
