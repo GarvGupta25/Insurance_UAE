@@ -89,19 +89,18 @@ def test_full_sandbox_flow_and_exact_schedule(fixture_client):
         assert len(db.scalars(select(Policy)).all()) == 1
 
 
-def test_ordinary_easy_fill_reaches_policy_without_a_broker_queue(fixture_client):
+def test_every_easy_fill_waits_for_a_broker_review(fixture_client):
     client, owner, engine = fixture_client
     _, quote = setup_case(client)
     application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
-    assert preview["status"] == "ready_for_confirmation"
+    assert preview["status"] == "awaiting_broker_review"
     with as_assigned_broker(owner, engine):
-        assert client.get("/api/broker/recommendations").json() == []
+        assert client.get("/api/broker/recommendations").json()
     submitted = send(client, f"/api/applications/{application}/submit", {
         "payload_hash": preview["payload_hash"], "declarations_confirmed": True,
     })
-    assert submitted.status_code == 200, submitted.text
-    assert client.get(f"/api/policies/{submitted.json()['policy_id']}").json()["status"] == "demo_active"
+    assert submitted.status_code == 409, submitted.text
 
 
 def test_no_cross_account_access_and_no_body_owner_override(fixture_client):

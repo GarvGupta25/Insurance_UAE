@@ -83,7 +83,7 @@ def applicable_regulator(emirate: str | None) -> str | None:
 
 
 QUESTION_GROUPS = {
-    "About you": ["legal_name", "date_of_birth", "nationality", "residency", "emirate", "emirates_id_status"],
+    "About you": ["legal_name", "date_of_birth", "nationality", "residency", "emirate"],
     "Health and cover": ["diagnosed_conditions", "smoker", "maternity", "geography", "start_date"],
     "Funding and preferences": ["payer", "annual_budget", "strict_budget", "payment_frequency"],
 }
@@ -98,6 +98,7 @@ PROMPTS = {
     "nationality": "What is your nationality?",
     "residency": "Are you a UAE citizen, resident, visitor, or awaiting residency?",
     "emirate": "Which emirate do you live in?",
+    "emirates_id_status": "Is your Emirates ID issued, pending, or not applicable as a visitor?",
     "diagnosed_conditions": "Do you have any diagnosed conditions you need covered?",
     "smoker": "Do you currently smoke? You can also say unknown or prefer not to answer.",
     "maternity": "Would you like maternity benefits included?",
