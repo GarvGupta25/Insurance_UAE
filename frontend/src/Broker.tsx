@@ -45,6 +45,7 @@ export function BrokerWorkspace() {
   const recommendations = useQuery<Recommendation[]>({ queryKey: ['broker-recommendations'], queryFn: () => api('/api/broker/recommendations') });
   const appeals = useQuery<Appeal[]>({ queryKey: ['broker-appeals'], queryFn: () => api('/api/broker/appeals') });
   const reassessments = useQuery<Reassessment[]>({ queryKey: ['broker-reassessments'], queryFn: () => api('/api/broker/reassessments') });
+  const worklist = useQuery<any[]>({ queryKey: ['broker-worklist'], queryFn: () => api('/api/broker/worklist') });
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState('');
@@ -121,6 +122,7 @@ export function BrokerWorkspace() {
   return <>
     <div className="page-heading compact"><div><span className="eyebrow">BROKER WORKSPACE</span><h1>Review the recommendation.<br/>Keep the member in control.</h1><p>Review plan requests from assigned members, then handle appeals and policy fit checks here. Ordinary Easy Fill can proceed directly to member confirmation.</p></div><ClipboardCheck className="heading-icon" size={54}/></div>
     <div className="notice broker-notice"><AlertCircle size={19}/><div><strong>Demonstration review</strong><br/>Only cases assigned to your broker account appear here. Member submissions remain separate from your review decisions.</div></div>
+    <section className="surface"><div className="section-heading"><div><span className="eyebrow">PRIORITIZED WORKLIST</span><h2>What needs attention first</h2></div><span className="badge neutral">{worklist.data?.length || 0} open</span></div>{worklist.isLoading ? <Loading/> : !worklist.data?.length ? <p className="muted">No assigned work is pending.</p> : <div className="broker-list">{worklist.data.map(item => <div className="list-row" key={item.id}><span className="badge neutral">#{item.priority_rank}</span><div><strong>{item.item_type.replaceAll('_', ' ')}</strong><small>{item.priority_reason}</small></div><span>{item.age_days}d</span></div>)}</div>}</section>
     <div className="metric-grid broker-metrics"><div><span>Plan requests</span><strong>{pending.length}</strong><small>Members who asked for a broker decision</small></div><div><span>Needs attention</span><strong>{uncertain.length + pendingAppeals.length + pendingReassessments.length}</strong><small>Tradeoffs, appeals, or fit checks awaiting a decision</small></div></div>
     {message && <div className="notice" role="status">{message}</div>}
     {error && <ErrorView error={new Error(error)}/>} 

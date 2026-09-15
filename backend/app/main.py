@@ -600,6 +600,22 @@ def broker_recommendations(user: User = Depends(require_broker), db: Session = D
     ]
 
 
+@app.get("/api/broker/worklist")
+def broker_worklist(user: User = Depends(require_broker), db: Session = Depends(session)):
+    """One assigned-member queue; deterministic ordering is intentionally visible to brokers."""
+    rows = db.scalars(select(Recommendation).join(BrokerAssignment, BrokerAssignment.member_id == Recommendation.owner_id).where(BrokerAssignment.broker_id == user.id, Recommendation.status == "pending_review")).all()
+    current = now()
+    items = []
+    for row in rows:
+        age_days = max(0, (current - row.created_at).days)
+        annual_premium = row.summary.get("selected", {}).get("plan", {}).get("annual_premium", 0)
+        items.append({"id": row.id, "item_type": "recommendation", "applicant_id": row.owner_id, "case_id": row.case_id, "age_days": age_days, "amount_aed": annual_premium, "priority_reason": f"{age_days} day(s) unresolved; recommendation needs broker approval."})
+    items.sort(key=lambda item: (-item["age_days"], 1, -item["amount_aed"], item["id"]))
+    for rank, item in enumerate(items, 1):
+        item["priority_rank"] = rank
+    return items
+
+
 @app.post("/api/broker/recommendations/{recommendation_id}/review")
 def review_recommendation(
     recommendation_id: str,
