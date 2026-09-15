@@ -9,7 +9,7 @@ type Recommendation = {
   id: string;
   quote_id: string;
   proposed_plan_id: string;
-  status: 'pending_review' | 'approved';
+  status: 'pending_review';
   certainty: 'clear' | 'tradeoff' | 'missing_terms';
   summary: {
     selected: any;
@@ -119,12 +119,12 @@ export function BrokerWorkspace() {
   const pendingReassessments = reassessmentRows.filter(item => item.status === 'pending_review');
 
   return <>
-    <div className="page-heading compact"><div><span className="eyebrow">BROKER WORKSPACE</span><h1>Review the recommendation.<br/>Keep the member in control.</h1><p>Check the documented fit and approve or change the supported plan before the member submits.</p></div><ClipboardCheck className="heading-icon" size={54}/></div>
+    <div className="page-heading compact"><div><span className="eyebrow">BROKER WORKSPACE</span><h1>Review the recommendation.<br/>Keep the member in control.</h1><p>Review plan requests from assigned members, then handle appeals and policy fit checks here. Ordinary Easy Fill can proceed directly to member confirmation.</p></div><ClipboardCheck className="heading-icon" size={54}/></div>
     <div className="notice broker-notice"><AlertCircle size={19}/><div><strong>Demonstration review</strong><br/>Only cases assigned to your broker account appear here. Member submissions remain separate from your review decisions.</div></div>
-    <div className="metric-grid broker-metrics"><div><span>Awaiting review</span><strong>{pending.length}</strong><small>Prepared applications needing a decision</small></div><div><span>Needs attention</span><strong>{uncertain.length + pendingAppeals.length + pendingReassessments.length}</strong><small>Recommendations, appeals, or fit checks awaiting a decision</small></div><div><span>Reviewed</span><strong>{rows.length - pending.length}</strong><small>Recommendations ready for member confirmation</small></div></div>
+    <div className="metric-grid broker-metrics"><div><span>Plan requests</span><strong>{pending.length}</strong><small>Members who asked for a broker decision</small></div><div><span>Needs attention</span><strong>{uncertain.length + pendingAppeals.length + pendingReassessments.length}</strong><small>Tradeoffs, appeals, or fit checks awaiting a decision</small></div></div>
     {message && <div className="notice" role="status">{message}</div>}
     {error && <ErrorView error={new Error(error)}/>} 
-    {!rows.length ? <div className="empty-state"><ClipboardCheck size={32}/><h3>Nothing is waiting for review.</h3><p>Prepared recommendations will appear here after a member selects Easy Fill.</p><Link className="secondary button" to="/app">Return to workspace</Link></div> : <div className="broker-list">{rows.map(item => {
+    {!rows.length ? <div className="empty-state"><ClipboardCheck size={32}/><h3>No plan review requests.</h3><p>Assigned members can choose “Ask my assigned broker to review” alongside Easy Fill. Appeals and fit checks appear below.</p><Link className="secondary button" to="/app">Return to workspace</Link></div> : <div className="broker-list">{rows.map(item => {
       const plan = item.summary.selected?.plan || {};
       const options = [item.summary.selected, ...(item.summary.alternatives || [])].filter(Boolean);
       const activePlan = selected[item.id] || item.proposed_plan_id;

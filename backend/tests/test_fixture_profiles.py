@@ -89,7 +89,7 @@ def test_original_applicants_can_get_real_quotations_without_identity_or_payment
         if profile["id"] == "P3":
             prepared = client.post(
                 "/api/applications/prepare",
-                json={"quote_id": quote.json()["id"], "plan_id": "plan_b"},
+                json={"quote_id": quote.json()["id"], "plan_id": "plan_b", "request_broker_review": True},
                 headers={"Idempotency-Key": str(uuid4())},
             )
             assert prepared.status_code == 200, prepared.text

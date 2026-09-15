@@ -292,6 +292,33 @@ def send_message(
         context["schedule"] = [
             {"due_date": r.due_date, "amount_fils": r.amount, "status": r.status} for r in rows
         ]
+        receipts = db.scalars(
+            select(Receipt).where(Receipt.installment_id.in_([r.id for r in rows]), Receipt.owner_id == user.id)
+        ).all()
+        projection = db.scalar(select(LedgerProjection).where(LedgerProjection.policy_id == policy.id))
+        decisions = db.scalars(
+            select(ServicingEvent)
+            .where(ServicingEvent.policy_id == policy.id, ServicingEvent.owner_id == user.id)
+            .order_by(ServicingEvent.sequence.desc())
+            .limit(15)
+        ).all()
+        context["payments"] = {
+            "total_scheduled_fils": sum(r.amount for r in rows),
+            "receipt_total_fils": sum(r.amount for r in receipts),
+            "receipt_total_aed": sum(r.amount for r in receipts) / 100,
+            "receipts": [{"amount_fils": r.amount, "provider": r.provider} for r in receipts],
+        }
+        context["servicing_ledger"] = projection.ledger if projection else empty_ledger()
+        context["servicing_ledger_aed"] = {
+            "deductible_met": context["servicing_ledger"]["deductible_met_fils"] / 100,
+            "plan_payments": context["servicing_ledger"]["annual_paid_fils"] / 100,
+        }
+        context["recent_servicing"] = [
+            {"event_id": r.root_id, "record_type": r.record_type, "outcome": r.outcome,
+             "reason_code": r.reason_code, "plan_pays_fils": r.plan_pays_fils,
+             "member_pays_fils": r.member_pays_fils}
+            for r in decisions
+        ]
 
     def action():
         message = Message(
@@ -505,6 +532,7 @@ def prepare_application(
             profile_version=row.version,
             proposed_plan_id=body.plan_id,
             certainty=certainty,
+            status="pending_review" if body.request_broker_review else "prepared",
             summary={
                 "selected": item,
                 "alternatives": [candidate for candidate in quote.snapshot["items"] if candidate["plan"]["id"] != body.plan_id],
@@ -523,6 +551,7 @@ def prepare_application(
             recommendation_id=recommendation.id,
             snapshot=snapshot,
             payload_hash=digest(snapshot),
+            status="awaiting_broker_review" if body.request_broker_review else "ready_for_confirmation",
         )
         db.add(application)
         db.flush()
@@ -552,6 +581,7 @@ def broker_recommendations(user: User = Depends(require_broker), db: Session = D
         select(Recommendation)
         .join(BrokerAssignment, BrokerAssignment.member_id == Recommendation.owner_id)
         .where(BrokerAssignment.broker_id == user.id)
+        .where(Recommendation.status == "pending_review")
         .order_by(Recommendation.created_at.desc())
     ).all()
     return [
@@ -646,10 +676,10 @@ def submit_application(
                 422, "Review the exact application and confirm the declarations before submitting."
             )
         if application.status != "ready_for_confirmation":
-            raise HTTPException(409, "This application needs an approved broker recommendation before submission.")
+            raise HTTPException(409, "This application is still awaiting a requested broker review.")
         recommendation = own(db, Recommendation, application.recommendation_id, user)
-        if recommendation.status != "approved":
-            raise HTTPException(409, "The selected recommendation is not approved.")
+        if recommendation.status not in {"prepared", "approved"}:
+            raise HTTPException(409, "The selected recommendation is not ready for confirmation.")
         if application.snapshot["profile_version"] != profile(db, user).version:
             raise HTTPException(409, "Your information changed. Prepare a new application.")
         if (now() - datetime.fromisoformat(application.snapshot["prepared_at"])).total_seconds() > 1800:

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain import source_data
-from app.models import ServicingEvent
+from app.models import Message, ServicingEvent
 
 
 def post(client, path, body):
@@ -48,7 +48,7 @@ def create_policy(fixture_client, plan_id="plan_a"):
     assert client.patch("/api/me/profile", json={"expected_version": profile["version"], "changes": facts}).status_code == 200
     case = post(client, "/api/cases", {}).json()["id"]
     quote = post(client, f"/api/cases/{case}/quotes", {}).json()["id"]
-    application = post(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan_id}).json()["id"]
+    application = post(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan_id, "request_broker_review": True}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
     assert broker_post(
         fixture_client,
@@ -79,6 +79,31 @@ def test_servicing_endpoint_persists_claim_and_keeps_forecast_out_of_ledger(fixt
     detail = client.get(f"/api/policies/{policy}").json()
     assert [item["event_id"] for item in detail["servicing"]] == ["PRE-X", "CLM-X"]
     assert detail["servicing"][0]["ledger_after"]["annual_paid_fils"] == 0
+
+
+def test_policy_agent_receives_recorded_receipts_and_claim_ledger(fixture_client):
+    client, _, engine = fixture_client
+    policy = create_policy(fixture_client)
+    detail = client.get(f"/api/policies/{policy}").json()
+    order = post(client, f"/api/instalments/{detail['instalments'][0]['id']}/payment-order", {}).json()
+    assert post(client, f"/api/payment-orders/{order['id']}/simulate", {"result": "captured"}).status_code == 200
+    claim = post(client, f"/api/policies/{policy}/servicing", {
+        "event_id": "AGENT-CLM", "kind": "claim", "policy_month": 0,
+        "benefit_class": "general", "provider_tier": "in_network_clinic", "billed_amount": 500,
+    })
+    assert claim.status_code == 200
+    case = client.get("/api/cases").json()[0]["id"]
+    sent = post(client, f"/api/cases/{case}/messages", {
+        "text": "What has been paid and how much deductible have I met?", "policy_id": policy,
+    })
+    assert sent.status_code == 200
+    with Session(engine) as db:
+        context = db.scalar(select(Message).where(Message.id == sent.json()["message_id"])).details["context"]
+    assert context["payments"]["receipt_total_fils"] == detail["total_fils"]
+    assert context["payments"]["receipt_total_aed"] == 4200
+    assert context["servicing_ledger"]["deductible_met_fils"] == 50000
+    assert context["servicing_ledger_aed"]["deductible_met"] == 500
+    assert context["recent_servicing"][0]["event_id"] == "AGENT-CLM"
 
 
 def test_servicing_preview_is_read_only_and_rejects_a_stale_confirmation(fixture_client):

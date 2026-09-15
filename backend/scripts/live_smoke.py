@@ -122,7 +122,7 @@ def main():
         quoted = request(client, "GET", f"{api}/quotes/{quote}", token)
         assert quoted["recommended_plan_id"] == "plan_a"
         app = request(
-            client, "POST", api + "/applications/prepare", token, {"quote_id": quote, "plan_id": "plan_a"}
+            client, "POST", api + "/applications/prepare", token, {"quote_id": quote, "plan_id": "plan_a", "request_broker_review": True}
         )["id"]
         preview = request(client, "GET", f"{api}/applications/{app}", token)
         denied = client.post(

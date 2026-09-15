@@ -54,7 +54,7 @@ def setup_case(client, **overrides):
 
 def setup_policy(client, owner, engine, plan="plan_b"):
     case, quote = setup_case(client)
-    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan}).json()["id"]
+    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": plan, "request_broker_review": True}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
     with as_assigned_broker(owner, engine):
         review = send(
@@ -87,6 +87,21 @@ def test_full_sandbox_flow_and_exact_schedule(fixture_client):
     with Session(engine) as db:
         assert len(db.scalars(select(Receipt)).all()) == 1
         assert len(db.scalars(select(Policy)).all()) == 1
+
+
+def test_ordinary_easy_fill_reaches_policy_without_a_broker_queue(fixture_client):
+    client, owner, engine = fixture_client
+    _, quote = setup_case(client)
+    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    preview = client.get(f"/api/applications/{application}").json()
+    assert preview["status"] == "ready_for_confirmation"
+    with as_assigned_broker(owner, engine):
+        assert client.get("/api/broker/recommendations").json() == []
+    submitted = send(client, f"/api/applications/{application}/submit", {
+        "payload_hash": preview["payload_hash"], "declarations_confirmed": True,
+    })
+    assert submitted.status_code == 200, submitted.text
+    assert client.get(f"/api/policies/{submitted.json()['policy_id']}").json()["status"] == "demo_active"
 
 
 def test_no_cross_account_access_and_no_body_owner_override(fixture_client):
@@ -150,7 +165,7 @@ def test_stale_quote_and_confirmation_never_submit(fixture_client):
 def test_duplicate_application_is_one_policy(fixture_client):
     client, owner, engine = fixture_client
     _, quote = setup_case(client)
-    a = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    a = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a", "request_broker_review": True}).json()["id"]
     preview = client.get(f"/api/applications/{a}").json()
     with as_assigned_broker(owner, engine):
         assert send(
@@ -168,10 +183,10 @@ def test_duplicate_application_is_one_policy(fixture_client):
         assert len(db.scalars(select(Policy)).all()) == 1
 
 
-def test_broker_review_is_required_before_sandbox_submission(fixture_client):
+def test_requested_broker_review_is_required_before_sandbox_submission(fixture_client):
     client, owner, engine = fixture_client
     _, quote = setup_case(client)
-    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a", "request_broker_review": True}).json()["id"]
     preview = client.get(f"/api/applications/{application}").json()
     body = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
     assert send(client, f"/api/applications/{application}/submit", body).status_code == 409

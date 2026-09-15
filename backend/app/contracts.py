@@ -168,6 +168,7 @@ class MessageRequest(BaseModel):
 class PrepareRequest(BaseModel):
     quote_id: str
     plan_id: str
+    request_broker_review: bool = False
 
 
 class ConfirmRequest(BaseModel):

@@ -45,7 +45,7 @@ def test_broker_queue_and_review_are_hidden_from_members_and_unassigned_brokers(
         return client.post(path, json=body or {}, headers={"Idempotency-Key": str(uuid4())})
     case = send("/api/cases").json()["id"]
     quote = send(f"/api/cases/{case}/quotes").json()["id"]
-    application = send("/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    application = send("/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a", "request_broker_review": True}).json()["id"]
     recommendation_id = client.get(f"/api/applications/{application}").json()["recommendation_id"]
     assert client.get("/api/me/access").json() == {"role": "member"}
     assert client.get("/api/broker/recommendations").status_code == 403
