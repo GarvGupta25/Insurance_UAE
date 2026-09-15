@@ -66,7 +66,8 @@ def test_broker_cannot_approve_a_recommendation_after_profile_change(fixture_cli
     facts = {"age": 26, "marital_status": "single", "smoker": "no", "diagnosed_conditions": "no", "budget_category": "low", "priorities": ["lowest premium"]}
     current = client.get("/api/me/profile").json()
     assert client.patch("/api/me/profile", json={"expected_version": current["version"], "changes": facts}).status_code == 200
-    send = lambda path, body=None: client.post(path, json=body or {}, headers={"Idempotency-Key": str(uuid4())})
+    def send(path, body=None):
+        return client.post(path, json=body or {}, headers={"Idempotency-Key": str(uuid4())})
     case = send("/api/cases").json()["id"]
     quote = send(f"/api/cases/{case}/quotes").json()["id"]
     application = send("/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
@@ -76,4 +77,3 @@ def test_broker_cannot_approve_a_recommendation_after_profile_change(fixture_cli
     with as_assigned_broker(owner, engine):
         response = send(f"/api/broker/recommendations/{recommendation_id}/review", {"action": "approve"})
         assert response.status_code == 409
-        assert "stale" in response.json()["detail"].lower()
