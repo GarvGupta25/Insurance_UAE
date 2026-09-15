@@ -103,6 +103,18 @@ def test_every_easy_fill_waits_for_a_broker_review(fixture_client):
     assert submitted.status_code == 409, submitted.text
 
 
+def test_repeated_pending_submission_attempts_cannot_create_a_policy(fixture_client):
+    client, _, _ = fixture_client
+    _, quote = setup_case(client)
+    application = send(client, "/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    preview = client.get(f"/api/applications/{application}").json()
+    body = {"payload_hash": preview["payload_hash"], "declarations_confirmed": True}
+    first = send(client, f"/api/applications/{application}/submit", body)
+    second = send(client, f"/api/applications/{application}/submit", body)
+    assert [first.status_code, second.status_code] == [409, 409]
+    assert client.get("/api/policies").json() == []
+
+
 def test_no_cross_account_access_and_no_body_owner_override(fixture_client):
     client, owner, _ = fixture_client
     case, quote = setup_case(client)
