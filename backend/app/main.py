@@ -617,6 +617,13 @@ def broker_worklist(user: User = Depends(require_broker), db: Session = Depends(
         age_days = max(0, (current - row.created_at).days)
         contested = db.scalar(select(ServicingEvent).where(ServicingEvent.id == row.supersedes_id))
         items.append({"id": row.id, "item_type": "appeal", "applicant_id": row.owner_id, "case_id": None, "age_days": age_days, "amount_aed": (contested.member_pays_fils or 0) / 100 if contested else 0, "priority_reason": f"{age_days} day(s) unresolved; appeal blocks a member decision."})
+    uncertain_rows = db.scalars(select(ServicingEvent).join(BrokerAssignment, BrokerAssignment.member_id == ServicingEvent.owner_id).where(BrokerAssignment.broker_id == user.id, ServicingEvent.record_type.in_(["decision", "revision"]), ServicingEvent.reason_code == "insufficient_data")).all()
+    for row in uncertain_rows:
+        newer = db.scalar(select(ServicingEvent.id).where(ServicingEvent.policy_id == row.policy_id, ServicingEvent.root_id == row.root_id, ServicingEvent.sequence > row.sequence, ServicingEvent.record_type.in_(["decision", "revision"])))
+        if newer:
+            continue
+        age_days = max(0, (current - row.created_at).days)
+        items.append({"id": row.id, "item_type": "insufficient_data", "applicant_id": row.owner_id, "case_id": None, "age_days": age_days, "amount_aed": (row.member_pays_fils or 0) / 100, "priority_reason": f"{age_days} day(s) unresolved; missing policy information blocks the member decision."})
     reassessments = db.scalars(select(PolicyReassessment).join(BrokerAssignment, BrokerAssignment.member_id == PolicyReassessment.owner_id).where(BrokerAssignment.broker_id == user.id, PolicyReassessment.status == "pending_review")).all()
     for row in reassessments:
         age_days = max(0, (current - row.created_at).days)
