@@ -67,8 +67,6 @@ class Facts(BaseModel):
     def consistent_health(self):
         if self.diagnosed_conditions == "no" and self.conditions:
             raise ValueError("A 'no diagnosed conditions' answer conflicts with the listed conditions.")
-        if self.diagnosed_conditions == "yes" and not self.conditions:
-            raise ValueError("Name the diagnosed condition, or choose unknown/declined.")
         return self
 
 
@@ -106,8 +104,13 @@ PROMPTS = {
 
 
 def readiness(facts: dict):
-    legacy_fields = {"legal_name", "date_of_birth", "nationality", "residency", "emirate", "payer"}
-    if not any(facts.get(field) is not None for field in legacy_fields):
+    # Short intake answers remain authoritative when optional application details are added.
+    # A detailed-first profile still uses the extended checklist.
+    challenge_fields = {"age", "marital_status", "budget_category", "priorities"}
+    detailed_fields = {"legal_name", "date_of_birth", "nationality", "residency", "emirate", "payer"}
+    if any(facts.get(field) for field in challenge_fields) or not any(
+        facts.get(field) is not None for field in detailed_fields
+    ):
         groups = {
             "About you": ["age", "marital_status", "smoker"],
             "Health and upcoming care": ["diagnosed_conditions"],
@@ -130,13 +133,14 @@ def readiness(facts: dict):
     if facts.get("maternity"):
         groups["Health and cover"].append("maximum_maternity_wait")
     if facts.get("diagnosed_conditions") == "yes":
-        groups["Health and cover"].append("immediate_chronic_cover")
+        groups["Health and cover"] += ["conditions", "immediate_chronic_cover"]
     if facts.get("payer") == "employer":
         groups["Funding and preferences"] += ["company_name", "contribution_aed"]
     if facts.get("payer") == "sponsor":
         groups["Funding and preferences"] += ["sponsor_name", "contribution_aed"]
     missing = [
-        key for values in groups.values() for key in values if facts.get(key) is None or facts.get(key) == ""
+        key for values in groups.values() for key in values
+        if facts.get(key) is None or facts.get(key) == "" or key == "conditions" and not facts.get(key)
     ]
     return {
         "mode": "extended",

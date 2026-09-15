@@ -30,6 +30,23 @@ def test_fixture_adapter_does_not_mutate_the_source_profile():
     assert profile["stated_priorities"] == ["ongoing coverage for existing conditions", "cost matters"]
 
 
+def test_optional_application_details_do_not_replace_a_ready_short_profile():
+    short = {
+        "age": 32, "marital_status": "married", "smoker": "no",
+        "diagnosed_conditions": "no", "budget_category": "moderate",
+        "priorities": ["hospital access"],
+    }
+    assert readiness(short)["ready"]
+    expanded = {**short, "legal_name": "Demo Member", "payer": "self"}
+    assert readiness(expanded)["mode"] == "challenge"
+    assert readiness(expanded)["ready"]
+
+
+def test_diagnosis_answer_can_be_saved_before_condition_name():
+    partial = Facts.model_validate({"diagnosed_conditions": "yes"}).model_dump()
+    assert readiness(partial)["missing"] == ["age", "marital_status", "smoker", "conditions", "budget_category", "priorities"]
+
+
 def test_original_applicants_have_expected_deterministic_routing_and_recommendations():
     expected = {
         "P1": ("general_needs", "under_40", "plan_a"),
