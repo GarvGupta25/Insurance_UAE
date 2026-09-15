@@ -19,3 +19,5 @@
 @media(max-width:800px){.servicing-layout,.broker-grid{grid-template-columns:1fr}.service-ledger{align-self:stretch}}
 .tabs button[aria-pressed=true]{color:#315aa5;border-bottom-color:#315aa5}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.form-actions{border-top:1px solid var(--line);padding-top:20px;margin-top:25px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+@media(max-width:500px){.form-actions{position:sticky;bottom:0;background:white;padding-bottom:12px;flex-direction:column-reverse;align-items:stretch}.form-actions>button{width:100%}}

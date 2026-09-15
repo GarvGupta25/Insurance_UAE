@@ -26,6 +26,7 @@ class Facts(BaseModel):
     mobile: Short | None = None
     address: Short | None = None
     emirates_id: Short | None = None
+    emirates_id_status: Literal["issued", "application_pending", "not_applicable_visitor"] | None = None
     passport_number: Short | None = None
     identity_expiry: date | None = None
     existing_cover: Answer | None = None
@@ -70,8 +71,19 @@ class Facts(BaseModel):
         return self
 
 
+def applicable_regulator(emirate: str | None) -> str | None:
+    """Educational label only; it never changes eligibility or price."""
+    if emirate == "Dubai":
+        return "DHA"
+    if emirate == "Abu Dhabi":
+        return "DoH"
+    if emirate in {"Sharjah", "Ajman", "Fujairah", "Ras Al Khaimah", "Umm Al Quwain"}:
+        return "MOHAP"
+    return None
+
+
 QUESTION_GROUPS = {
-    "About you": ["legal_name", "date_of_birth", "nationality", "residency", "emirate"],
+    "About you": ["legal_name", "date_of_birth", "nationality", "residency", "emirate", "emirates_id_status"],
     "Health and cover": ["diagnosed_conditions", "smoker", "maternity", "geography", "start_date"],
     "Funding and preferences": ["payer", "annual_budget", "strict_budget", "payment_frequency"],
 }

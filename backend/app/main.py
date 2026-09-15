@@ -532,7 +532,7 @@ def prepare_application(
             profile_version=row.version,
             proposed_plan_id=body.plan_id,
             certainty=certainty,
-            status="pending_review" if body.request_broker_review else "prepared",
+            status="pending_review",
             summary={
                 "selected": item,
                 "alternatives": [candidate for candidate in quote.snapshot["items"] if candidate["plan"]["id"] != body.plan_id],
@@ -551,7 +551,7 @@ def prepare_application(
             recommendation_id=recommendation.id,
             snapshot=snapshot,
             payload_hash=digest(snapshot),
-            status="awaiting_broker_review" if body.request_broker_review else "ready_for_confirmation",
+            status="awaiting_broker_review",
         )
         db.add(application)
         db.flush()
@@ -678,7 +678,7 @@ def submit_application(
         if application.status != "ready_for_confirmation":
             raise HTTPException(409, "This application is still awaiting a requested broker review.")
         recommendation = own(db, Recommendation, application.recommendation_id, user)
-        if recommendation.status not in {"prepared", "approved"}:
+        if recommendation.status != "approved":
             raise HTTPException(409, "The selected recommendation is not ready for confirmation.")
         if application.snapshot["profile_version"] != profile(db, user).version:
             raise HTTPException(409, "Your information changed. Prepare a new application.")

@@ -57,6 +57,8 @@ def classify(facts):
         "general_needs"
     )
     flags = []
+    if age is not None and age >= 65:
+        flags.append({"code": "additional_medical_disclosure", "source": "age", "explanation": "Additional medical disclosure is required for applicants 65 and older.", "review_relevance": "A reviewer must assess supporting medical information before a standard recommendation."})
     if conditions:
         flags.append({"code": "declared_conditions", "source": "conditions", "explanation": "Existing conditions were declared.", "review_relevance": "Check the plan's existing-condition terms and waiting period."})
     if maternity_soon:
@@ -71,6 +73,14 @@ def classify(facts):
 
 
 def compare(facts):
+    age = facts.get("age")
+    if age is None and facts.get("date_of_birth"):
+        born = facts["date_of_birth"]
+        born = date.fromisoformat(born) if isinstance(born, str) else born
+        today = date.today()
+        age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    if age is not None and age >= 65:
+        return [{"plan": plan, "status": "needs_more_information", "gaps": [], "unknowns": ["Additional medical disclosure required for applicants 65 and older."], "reasons": [], "tradeoffs": [], "premium_fils": money(plan["annual_premium"]), "monthly_budget_equivalent_fils": int((Decimal(plan["annual_premium"]) * 100 / 12).quantize(Decimal("1"), rounding=ROUND_HALF_UP)), "source": "Supplied fictional challenge catalogue v3", "source_id": plan["id"]} for plan in plans()]
     results = []
     needs = " ".join(facts.get("near_term_needs") or []).lower()
     priorities = " ".join(facts.get("priorities") or []).lower()

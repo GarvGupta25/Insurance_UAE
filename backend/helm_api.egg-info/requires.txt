@@ -1,0 +1,16 @@
+fastapi<1,>=0.115
+uvicorn<1,>=0.34
+pydantic-settings<3,>=2.8
+sqlalchemy<3,>=2.0
+psycopg[binary,pool]<4,>=3.2
+httpx<1,>=0.28
+python-multipart>=0.0.20
+cryptography>=44
+groq<1,>=0.30
+langgraph<2,>=1
+langgraph-checkpoint-postgres<4,>=3
+reportlab<5,>=4.3
+pymupdf<2,>=1.25
+pillow<13,>=11
+pytesseract<1,>=0.3.13
+av<17,>=15
