@@ -59,3 +59,21 @@ def test_broker_queue_and_review_are_hidden_from_members_and_unassigned_brokers(
         assert client.get("/api/me/access").json() == {"role": "broker"}
         assert [item["id"] for item in client.get("/api/broker/recommendations").json()] == [recommendation_id]
         assert send(f"/api/broker/recommendations/{recommendation_id}/review", {"action": "approve"}).status_code == 200
+
+
+def test_broker_cannot_approve_a_recommendation_after_profile_change(fixture_client):
+    client, owner, engine = fixture_client
+    facts = {"age": 26, "marital_status": "single", "smoker": "no", "diagnosed_conditions": "no", "budget_category": "low", "priorities": ["lowest premium"]}
+    current = client.get("/api/me/profile").json()
+    assert client.patch("/api/me/profile", json={"expected_version": current["version"], "changes": facts}).status_code == 200
+    send = lambda path, body=None: client.post(path, json=body or {}, headers={"Idempotency-Key": str(uuid4())})
+    case = send("/api/cases").json()["id"]
+    quote = send(f"/api/cases/{case}/quotes").json()["id"]
+    application = send("/api/applications/prepare", {"quote_id": quote, "plan_id": "plan_a"}).json()["id"]
+    recommendation_id = client.get(f"/api/applications/{application}").json()["recommendation_id"]
+    changed = client.get("/api/me/profile").json()
+    assert client.patch("/api/me/profile", json={"expected_version": changed["version"], "changes": {"priorities": ["good network access"]}}).status_code == 200
+    with as_assigned_broker(owner, engine):
+        response = send(f"/api/broker/recommendations/{recommendation_id}/review", {"action": "approve"})
+        assert response.status_code == 409
+        assert "stale" in response.json()["detail"].lower()
