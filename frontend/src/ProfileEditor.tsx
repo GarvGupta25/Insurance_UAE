@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, ChevronDown, UploadCloud, LoaderCircle } from 'lucide-react';
 import { api, post } from './api';
 import { FormActions } from './FormActions';
@@ -47,6 +47,13 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
     try { await post(`/api/extractions/${extraction.id}/accept`, { expected_version: profile.version, changes: extraction.fields }); setExtraction(null); onSaved(); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
+  useEffect(() => {
+    if (!autoAdvance || busy || extraction || tab === groups.length - 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const required = registry[tab].filter(field => !field.label.includes('(optional)') && !(field.key === 'conditions' && facts.diagnosed_conditions !== 'yes') && !(field.key === 'maximum_maternity_wait' && !facts.maternity) && !(field.key === 'immediate_chronic_cover' && facts.diagnosed_conditions !== 'yes'));
+    if (!Object.keys(draft).length || required.some(field => facts[field.key] == null || facts[field.key] === '' || Array.isArray(facts[field.key]) && !facts[field.key].length)) return;
+    const timer = window.setTimeout(() => { void save(); }, 650);
+    return () => window.clearTimeout(timer);
+  }, [draft, autoAdvance, tab, busy, extraction]);
   return <section className="profile-editor" aria-label="Editable insurance profile">
     <div className="section-heading"><div><span className="eyebrow">YOUR DETAILS</span><h2>One profile. Every step.</h2></div><span className="badge neutral">{missing.length ? `${missing.length} details to go` : 'Ready to compare'}</span></div>
     {profile.readiness.mode === 'challenge' && <button type="button" className="quiet" onClick={() => { setUseExtended(value => !value); setTab(0); }}>{useExtended ? 'Use the short challenge profile' : 'Add detailed application information (optional)'}</button>}
