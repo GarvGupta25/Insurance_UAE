@@ -18,7 +18,10 @@ try {
     Remove-Job -Job $dockerJob -Force
 
     Write-Host 'Starting local authentication and database services...'
+    $previousErrorPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $supabaseOutput = & npx supabase start --ignore-health-check 2>&1
+    $ErrorActionPreference = $previousErrorPreference
     if ($LASTEXITCODE -ne 0) {
         throw 'Local Supabase could not start. Confirm that Docker Desktop shows Engine running, then retry.'
     }
