@@ -20,4 +20,5 @@
 .tabs button[aria-pressed=true]{color:#315aa5;border-bottom-color:#315aa5}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .form-actions{border-top:1px solid var(--line);padding-top:20px;margin-top:25px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.profile-tools{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:11px;color:#687892;margin:12px 0}.profile-tools label{display:flex;gap:6px;align-items:center}.saved-notice{font-size:12px;color:#24633d;background:#eff9f2;padding:9px 12px;border-radius:8px}
 @media(max-width:500px){.form-actions{position:sticky;bottom:0;background:white;padding-bottom:12px;flex-direction:column-reverse;align-items:stretch}.form-actions>button{width:100%}}

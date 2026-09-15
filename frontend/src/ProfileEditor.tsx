@@ -20,6 +20,8 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
   const [tab, setTab] = useState(0); const [draft, setDraft] = useState<Record<string, any>>({}); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const [useExtended, setUseExtended] = useState(false);
   const [extraction, setExtraction] = useState<any>(null);
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const [savedNotice, setSavedNotice] = useState('');
   const facts = { ...profile.facts, ...draft };
   const missing: string[] = profile.readiness.missing;
   const challenge = profile.readiness.mode === 'challenge' && !useExtended;
@@ -31,7 +33,7 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
   }
   async function save() {
     setError(''); setBusy(true);
-    try { await api('/api/me/profile', { method: 'PATCH', body: JSON.stringify({ expected_version: profile.version, changes: draft }) }); setDraft({}); onSaved(); }
+    try { await api('/api/me/profile', { method: 'PATCH', body: JSON.stringify({ expected_version: profile.version, changes: draft }) }); setDraft({}); onSaved(); if (autoAdvance && tab < groups.length - 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setSavedNotice(`Saved — moving to ${groups[tab + 1]}`); window.setTimeout(() => setTab(current => Math.min(current + 1, groups.length - 1)), 650); } }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function upload(file: File) {
@@ -48,7 +50,7 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
   return <section className="profile-editor" aria-label="Editable insurance profile">
     <div className="section-heading"><div><span className="eyebrow">YOUR DETAILS</span><h2>One profile. Every step.</h2></div><span className="badge neutral">{missing.length ? `${missing.length} details to go` : 'Ready to compare'}</span></div>
     {profile.readiness.mode === 'challenge' && <button type="button" className="quiet" onClick={() => { setUseExtended(value => !value); setTab(0); }}>{useExtended ? 'Use the short challenge profile' : 'Add detailed application information (optional)'}</button>}
-    <div className="tabs" role="tablist" aria-label="Profile stages">{groups.map((name, i) => <button role="tab" aria-selected={tab === i} key={name} onClick={() => setTab(i)}>{i + 1}. {name}</button>)}</div>
+    <div className="profile-tools"><label><input type="checkbox" checked={autoAdvance} onChange={event => setAutoAdvance(event.target.checked)}/> Auto-advance after save</label><small>Step {tab + 1} of {groups.length} · about {groups.length - tab} minute{groups.length - tab === 1 ? '' : 's'} left</small></div>{savedNotice && <p className="saved-notice" role="status">{savedNotice}</p>}<div className="tabs" role="tablist" aria-label="Profile stages">{groups.map((name, i) => <button role="tab" aria-selected={tab === i} key={name} onClick={() => setTab(i)}>{i + 1}. {name}</button>)}</div>
     {!challenge && tab === 0 && <label className="upload-area"><UploadCloud size={22}/><span><strong>Autofill from an identity document</strong><small>Optional · JPG, PNG or PDF · 10 MB · up to 5 pages</small></span><input aria-label="Upload identity document" type="file" accept="image/jpeg,image/png,application/pdf" disabled={busy} onChange={e => { if (e.target.files?.[0]) void upload(e.target.files[0]); e.target.value = ''; }}/></label>}
     {extraction && <div className="notice"><strong>Review extracted identity details</strong><p>{extraction.notice}</p>{Object.entries(extraction.fields).map(([key, value]) => <label className="field" key={key}>{key.replaceAll('_', ' ')}<input value={String(value)} onChange={e => setExtraction({ ...extraction, fields: { ...extraction.fields, [key]: e.target.value } })}/></label>)}<div className="actions"><button disabled={busy || !Object.keys(extraction.fields).length} onClick={accept}>Accept checked details</button><button className="secondary" onClick={() => setExtraction(null)}>Discard</button></div></div>}
     {facts.emirate && <p className="notice">Applicable regulator: <strong>{facts.emirate === 'Dubai' ? 'DHA' : facts.emirate === 'Abu Dhabi' ? 'DoH' : 'MOHAP'}</strong>. Educational only; this does not determine cover.</p>}

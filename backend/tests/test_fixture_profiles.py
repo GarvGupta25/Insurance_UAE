@@ -21,6 +21,13 @@ def test_original_applicants_fit_the_typed_profile_without_leaking_future_outcom
         assert "policy_inception" not in facts
 
 
+def test_applicant_65_or_older_requires_medical_disclosure_before_standard_quote():
+    items = compare({"age": 66})
+    assert len(items) == 3
+    assert all(item["status"] == "needs_more_information" for item in items)
+    assert all("additional medical disclosure required" in item["unknowns"][0].lower() for item in items)
+
+
 def test_fixture_adapter_does_not_mutate_the_source_profile():
     profile = source_data()["profiles"][2]
     facts = fixture_facts(profile)
