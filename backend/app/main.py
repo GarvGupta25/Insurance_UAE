@@ -628,6 +628,22 @@ def broker_worklist(user: User = Depends(require_broker), db: Session = Depends(
     return items
 
 
+@app.get("/api/broker/cases/{applicant_id}")
+def broker_case_detail(applicant_id: str, user: User = Depends(require_broker), db: Session = Depends(session)):
+    """Broker-only case record. This route is never exposed through member APIs."""
+    assignment = db.scalar(select(BrokerAssignment).where(BrokerAssignment.member_id == applicant_id, BrokerAssignment.broker_id == user.id))
+    if not assignment:
+        raise HTTPException(404, "Case not found.")
+    member_profile = db.scalar(select(Profile).where(Profile.owner_id == applicant_id))
+    facts = member_profile.facts if member_profile else {}
+    latest_quote = db.scalar(select(Quote).where(Quote.owner_id == applicant_id).order_by(Quote.created_at.desc()))
+    recommendation = db.scalar(select(Recommendation).where(Recommendation.owner_id == applicant_id).order_by(Recommendation.created_at.desc()))
+    policy = db.scalar(select(Policy).where(Policy.owner_id == applicant_id).order_by(Policy.created_at.desc()))
+    events = db.scalars(select(ServicingEvent).where(ServicingEvent.owner_id == applicant_id).order_by(ServicingEvent.sequence)).all()
+    reviews = db.scalars(select(ReviewDecision).join(Recommendation, ReviewDecision.recommendation_id == Recommendation.id).where(Recommendation.owner_id == applicant_id).order_by(ReviewDecision.created_at)).all()
+    return {"applicant_id": applicant_id, "profile": facts, "classification": classify(facts), "quote": latest_quote.snapshot if latest_quote else None, "recommendation": {"status": recommendation.status, "summary": recommendation.summary, "proposed_plan_id": recommendation.proposed_plan_id} if recommendation else None, "review_history": [{"action": review.action, "note": review.note, "decided_at": review.created_at.isoformat()} for review in reviews], "policy": policy.snapshot if policy else None, "servicing_history": [present_event(event) for event in events], "next_action_needed": "Broker review required" if recommendation and recommendation.status == "pending_review" else "No recommendation action pending"}
+
+
 @app.post("/api/broker/recommendations/{recommendation_id}/review")
 def review_recommendation(
     recommendation_id: str,
