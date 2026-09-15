@@ -35,6 +35,10 @@ try {
     if (-not (Test-LocalPort 8000)) {
         Start-Process -FilePath (Join-Path $projectRoot 'backend\.venv\Scripts\python.exe') -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000' -WorkingDirectory (Join-Path $projectRoot 'backend') -WindowStyle Hidden
     }
+    $workerRunning = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'app\.worker' }
+    if (-not $workerRunning) {
+        Start-Process -FilePath (Join-Path $projectRoot 'backend\.venv\Scripts\python.exe') -ArgumentList '-m', 'app.worker' -WorkingDirectory (Join-Path $projectRoot 'backend') -WindowStyle Hidden
+    }
     if (-not (Test-LocalPort 5174)) {
         Start-Process -FilePath 'npm.cmd' -ArgumentList '--prefix', 'frontend', 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5174' -WorkingDirectory $projectRoot -WindowStyle Hidden
     }
