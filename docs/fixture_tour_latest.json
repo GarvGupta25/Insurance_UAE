@@ -1,0 +1,463 @@
+{
+  "source_version": 3,
+  "applicants": [
+    {
+      "profile_id": "P1",
+      "classification": {
+        "cohort": "general_needs",
+        "age_band": "under_40",
+        "flags": []
+      },
+      "recommended_plan_id": "plan_a",
+      "approved_plan_id": "plan_a",
+      "quotes": [
+        {
+          "plan_id": "plan_a",
+          "annual_premium": 4200,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_b",
+          "annual_premium": 8900,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_c",
+          "annual_premium": 16500,
+          "status": "supported",
+          "tradeoffs": []
+        }
+      ]
+    },
+    {
+      "profile_id": "P2",
+      "classification": {
+        "cohort": "near_term_maternity",
+        "age_band": "under_40",
+        "flags": [
+          {
+            "code": "maternity_within_year",
+            "source": "near_term_needs",
+            "explanation": "Maternity cover is needed within twelve months.",
+            "review_relevance": "A twelve-month wait does not meet a within-year need."
+          }
+        ]
+      },
+      "recommended_plan_id": "plan_c",
+      "approved_plan_id": "plan_c",
+      "quotes": [
+        {
+          "plan_id": "plan_c",
+          "annual_premium": 16500,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_a",
+          "annual_premium": 4200,
+          "status": "does_not_meet_requirement",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_b",
+          "annual_premium": 8900,
+          "status": "does_not_meet_requirement",
+          "tradeoffs": []
+        }
+      ]
+    },
+    {
+      "profile_id": "P3",
+      "classification": {
+        "cohort": "ongoing_chronic_care",
+        "age_band": "55_plus",
+        "flags": [
+          {
+            "code": "declared_conditions",
+            "source": "conditions",
+            "explanation": "Existing conditions were declared.",
+            "review_relevance": "Check the plan's existing-condition terms and waiting period."
+          }
+        ]
+      },
+      "recommended_plan_id": "plan_b",
+      "approved_plan_id": "plan_b",
+      "quotes": [
+        {
+          "plan_id": "plan_b",
+          "annual_premium": 8900,
+          "status": "supported",
+          "tradeoffs": [
+            "Ongoing condition care faces a 6-month waiting period; confirm whether this gap is acceptable before approval."
+          ]
+        },
+        {
+          "plan_id": "plan_c",
+          "annual_premium": 16500,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_a",
+          "annual_premium": 4200,
+          "status": "does_not_meet_requirement",
+          "tradeoffs": []
+        }
+      ]
+    },
+    {
+      "profile_id": "P4",
+      "classification": {
+        "cohort": "general_needs",
+        "age_band": "40_54",
+        "flags": [
+          {
+            "code": "standard_access_preference",
+            "source": "priorities",
+            "explanation": "Good network access was requested.",
+            "review_relevance": "Restricted access needs an explicit tradeoff."
+          }
+        ]
+      },
+      "recommended_plan_id": "plan_b",
+      "approved_plan_id": "plan_b",
+      "quotes": [
+        {
+          "plan_id": "plan_b",
+          "annual_premium": 8900,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_c",
+          "annual_premium": 16500,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_a",
+          "annual_premium": 4200,
+          "status": "does_not_meet_requirement",
+          "tradeoffs": []
+        }
+      ]
+    },
+    {
+      "profile_id": "P5",
+      "classification": {
+        "cohort": "complex_ongoing_care",
+        "age_band": "55_plus",
+        "flags": [
+          {
+            "code": "declared_conditions",
+            "source": "conditions",
+            "explanation": "Existing conditions were declared.",
+            "review_relevance": "Check the plan's existing-condition terms and waiting period."
+          },
+          {
+            "code": "wide_access_preference",
+            "source": "priorities",
+            "explanation": "Wide hospital access was requested.",
+            "review_relevance": "Compare the available provider networks."
+          }
+        ]
+      },
+      "recommended_plan_id": "plan_c",
+      "approved_plan_id": "plan_c",
+      "quotes": [
+        {
+          "plan_id": "plan_c",
+          "annual_premium": 16500,
+          "status": "supported",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_a",
+          "annual_premium": 4200,
+          "status": "does_not_meet_requirement",
+          "tradeoffs": []
+        },
+        {
+          "plan_id": "plan_b",
+          "annual_premium": 8900,
+          "status": "does_not_meet_requirement",
+          "tradeoffs": []
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "profile_id": "P1",
+      "event_id": "CLM-1",
+      "kind": "claim",
+      "outcome": "covered",
+      "plan_pays": 1190,
+      "member_pays": 2010,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 1500,
+        "annual_paid": 1190,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-1"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P1",
+      "event_id": "CLM-6",
+      "kind": "claim",
+      "outcome": "covered",
+      "plan_pays": 1260,
+      "member_pays": 540,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 1500,
+        "annual_paid": 2450,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-1",
+          "CLM-6"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P2",
+      "event_id": "PRE-1",
+      "kind": "preauth",
+      "outcome": "approved_with_limit",
+      "plan_pays": 25000,
+      "member_pays": 15000,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 0,
+        "maternity_paid": 0,
+        "financial_event_ids": []
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P2",
+      "event_id": "CLM-2",
+      "kind": "claim",
+      "outcome": "covered",
+      "plan_pays": 25000,
+      "member_pays": 15000,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 25000,
+        "maternity_paid": 25000,
+        "financial_event_ids": [
+          "CLM-2"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P2",
+      "event_id": "CLM-7",
+      "kind": "claim",
+      "outcome": "denied",
+      "plan_pays": 0,
+      "member_pays": 3000,
+      "reason_code": "sublimit_exhausted",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 25000,
+        "maternity_paid": 25000,
+        "financial_event_ids": [
+          "CLM-2"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P3",
+      "event_id": "CLM-3",
+      "kind": "claim",
+      "outcome": "denied",
+      "plan_pays": 0,
+      "member_pays": 2800,
+      "reason_code": "waiting_period_not_elapsed",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 0,
+        "maternity_paid": 0,
+        "financial_event_ids": []
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P3",
+      "event_id": "APP-1",
+      "kind": "appeal",
+      "outcome": "upheld",
+      "plan_pays": 0,
+      "member_pays": 2800,
+      "reason_code": "waiting_period_not_elapsed",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 0,
+        "maternity_paid": 0,
+        "financial_event_ids": []
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P3",
+      "event_id": "CLM-8",
+      "kind": "claim",
+      "outcome": "covered",
+      "plan_pays": 1680,
+      "member_pays": 920,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 500,
+        "annual_paid": 1680,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-8"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P4",
+      "event_id": "CLM-4",
+      "kind": "claim",
+      "outcome": "denied",
+      "plan_pays": 0,
+      "member_pays": 6000,
+      "reason_code": "provider_out_of_network",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 0,
+        "maternity_paid": 0,
+        "financial_event_ids": []
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P4",
+      "event_id": "APP-2",
+      "kind": "appeal",
+      "outcome": "overturned",
+      "plan_pays": 4400,
+      "member_pays": 1600,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 500,
+        "annual_paid": 4400,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-4"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P4",
+      "event_id": "PRE-2",
+      "kind": "preauth",
+      "outcome": "approved",
+      "plan_pays": 22400,
+      "member_pays": 5600,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 500,
+        "annual_paid": 4400,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-4"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P5",
+      "event_id": "CLM-5",
+      "kind": "claim",
+      "outcome": "covered",
+      "plan_pays": 162000,
+      "member_pays": 18000,
+      "reason_code": "covered",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 162000,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-5"
+        ]
+      },
+      "cash_already_paid": null
+    },
+    {
+      "profile_id": "P5",
+      "event_id": "CLM-9",
+      "kind": "reimbursement",
+      "outcome": "insufficient_data",
+      "plan_pays": null,
+      "member_pays": null,
+      "reason_code": "insufficient_data",
+      "ledger": {
+        "deductible_met": 0,
+        "annual_paid": 162000,
+        "maternity_paid": 0,
+        "financial_event_ids": [
+          "CLM-5"
+        ]
+      },
+      "cash_already_paid": 4500
+    }
+  ],
+  "final_ledgers": {
+    "P1": {
+      "deductible_met": 1500,
+      "annual_paid": 2450,
+      "maternity_paid": 0,
+      "financial_event_ids": [
+        "CLM-1",
+        "CLM-6"
+      ]
+    },
+    "P2": {
+      "deductible_met": 0,
+      "annual_paid": 25000,
+      "maternity_paid": 25000,
+      "financial_event_ids": [
+        "CLM-2"
+      ]
+    },
+    "P3": {
+      "deductible_met": 500,
+      "annual_paid": 1680,
+      "maternity_paid": 0,
+      "financial_event_ids": [
+        "CLM-8"
+      ]
+    },
+    "P4": {
+      "deductible_met": 500,
+      "annual_paid": 4400,
+      "maternity_paid": 0,
+      "financial_event_ids": [
+        "CLM-4"
+      ]
+    },
+    "P5": {
+      "deductible_met": 0,
+      "annual_paid": 162000,
+      "maternity_paid": 0,
+      "financial_event_ids": [
+        "CLM-5"
+      ]
+    }
+  }
+}
