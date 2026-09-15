@@ -56,6 +56,7 @@ from .models import (
     PaymentOrder,
     Policy,
     PolicyReassessment,
+    Profile,
     Quote,
     Receipt,
     Recommendation,
@@ -612,6 +613,10 @@ def review_recommendation(
     def action():
         if recommendation.status != "pending_review":
             raise HTTPException(409, "This recommendation has already been reviewed.")
+        current_profile = db.scalar(select(Profile).where(Profile.owner_id == recommendation.owner_id))
+        if not current_profile or current_profile.version != recommendation.profile_version:
+            recommendation.status = "stale"
+            raise HTTPException(409, "This recommendation is stale because the member profile changed. Generate a fresh quote.")
         quote = assigned(db, Quote, recommendation.quote_id, user)
         selected_plan_id = body.selected_plan_id or recommendation.proposed_plan_id
         selected = next((item for item in quote.snapshot["items"] if item["plan"]["id"] == selected_plan_id), None)
