@@ -610,7 +610,19 @@ def broker_worklist(user: User = Depends(require_broker), db: Session = Depends(
         age_days = max(0, (current - row.created_at).days)
         annual_premium = row.summary.get("selected", {}).get("plan", {}).get("annual_premium", 0)
         items.append({"id": row.id, "item_type": "recommendation", "applicant_id": row.owner_id, "case_id": row.case_id, "age_days": age_days, "amount_aed": annual_premium, "priority_reason": f"{age_days} day(s) unresolved; recommendation needs broker approval."})
-    items.sort(key=lambda item: (-item["age_days"], 1, -item["amount_aed"], item["id"]))
+    appeals = db.scalars(select(ServicingEvent).join(BrokerAssignment, BrokerAssignment.member_id == ServicingEvent.owner_id).where(BrokerAssignment.broker_id == user.id, ServicingEvent.record_type == "appeal")).all()
+    for row in appeals:
+        if db.scalar(select(ServicingEvent.id).where(ServicingEvent.record_type == "appeal_review", ServicingEvent.supersedes_id == row.id)):
+            continue
+        age_days = max(0, (current - row.created_at).days)
+        contested = db.scalar(select(ServicingEvent).where(ServicingEvent.id == row.supersedes_id))
+        items.append({"id": row.id, "item_type": "appeal", "applicant_id": row.owner_id, "case_id": None, "age_days": age_days, "amount_aed": (contested.member_pays_fils or 0) / 100 if contested else 0, "priority_reason": f"{age_days} day(s) unresolved; appeal blocks a member decision."})
+    reassessments = db.scalars(select(PolicyReassessment).join(BrokerAssignment, BrokerAssignment.member_id == PolicyReassessment.owner_id).where(BrokerAssignment.broker_id == user.id, PolicyReassessment.status == "pending_review")).all()
+    for row in reassessments:
+        age_days = max(0, (current - row.created_at).days)
+        items.append({"id": row.id, "item_type": "reassessment", "applicant_id": row.owner_id, "case_id": None, "age_days": age_days, "amount_aed": 0, "priority_reason": f"{age_days} day(s) unresolved; policy-fit review needed."})
+    urgency = {"appeal": 0, "insufficient_data": 0, "recommendation": 1, "reassessment": 1}
+    items.sort(key=lambda item: (-item["age_days"], urgency[item["item_type"]], -item["amount_aed"], item["id"]))
     for rank, item in enumerate(items, 1):
         item["priority_rank"] = rank
     return items
