@@ -72,13 +72,13 @@ def main() -> None:
             {"broker": ids["broker@example"]},
         )
         db.execute(
-            text("DELETE FROM public.broker_assignments WHERE member_id = CAST(:member AS uuid)"),
+            text("DELETE FROM public.broker_assignments WHERE member_id = :member"),
             {"member": ids["member@example"]},
         )
         db.execute(
             text(
                 "INSERT INTO public.broker_assignments (member_id, broker_id) "
-                "VALUES (CAST(:member AS uuid), CAST(:broker AS uuid))"
+                "VALUES (:member, :broker)"
             ),
             {"member": ids["member@example"], "broker": ids["broker@example"]},
         )

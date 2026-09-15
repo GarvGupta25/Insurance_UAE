@@ -17,7 +17,11 @@ try {
     }
     Remove-Job -Job $dockerJob -Force
 
-    npx supabase start --ignore-health-check | Out-Host
+    Write-Host 'Starting local authentication and database services...'
+    $supabaseOutput = & npx supabase start --ignore-health-check 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Local Supabase could not start. Confirm that Docker Desktop shows Engine running, then retry.'
+    }
     if (-not (Test-Path (Join-Path $projectRoot 'backend\.env'))) {
         $status = npx supabase status -o json
         $status | & (Join-Path $projectRoot 'backend\.venv\Scripts\python.exe') (Join-Path $projectRoot 'backend\scripts\configure_local.py')
