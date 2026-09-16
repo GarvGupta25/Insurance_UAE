@@ -24,4 +24,5 @@
 .broker-case-detail{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}.broker-case-detail h3{margin-top:20px;font-size:15px}.broker-list .list-row{background:transparent;border:0;text-align:left;cursor:pointer;width:100%}
 .calculation-stepper{list-style:none;padding:0;display:grid;gap:9px}.calculation-stepper li{display:flex;gap:9px;align-items:flex-start;font-size:12px}.calculation-stepper span{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e8f0ff;color:#315aa5;font-weight:600;flex:none}
 :focus-visible{outline:3px solid #437dcc;outline-offset:3px}
+.coverage-summary{border-color:#c9d9f2;background:linear-gradient(135deg,#f7faff,#ffffff)}.coverage-summary .section-heading{align-items:flex-start}.coverage-summary .icon-text{margin:0}.coverage-summary>p{font-size:14px;line-height:1.7;max-width:860px}.coverage-summary .muted{font-size:12px;margin-top:16px}
 @media(max-width:500px){.form-actions{position:sticky;bottom:0;background:white;padding-bottom:12px;flex-direction:column-reverse;align-items:stretch}.form-actions>button{width:100%}}
