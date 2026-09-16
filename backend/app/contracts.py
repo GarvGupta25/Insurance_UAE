@@ -83,8 +83,22 @@ def applicable_regulator(emirate: str | None) -> str | None:
 
 
 QUESTION_GROUPS = {
-    "About you": ["legal_name", "date_of_birth", "nationality", "residency", "emirate"],
-    "Health and cover": ["diagnosed_conditions", "smoker", "maternity", "geography", "start_date"],
+    "About you": [
+        "legal_name",
+        "date_of_birth",
+        "nationality",
+        "residency",
+        "emirate",
+        "emirates_id_status",
+    ],
+    "Health and cover": [
+        "diagnosed_conditions",
+        "smoker",
+        "maternity",
+        "geography",
+        "start_date",
+        "near_term_needs",
+    ],
     "Funding and preferences": ["payer", "annual_budget", "strict_budget", "payment_frequency"],
 }
 PROMPTS = {
@@ -116,32 +130,36 @@ PROMPTS = {
 }
 
 
+def challenge_readiness(facts: dict):
+    """Readiness adapter used only by the supplied compact judging fixtures."""
+    groups = {
+        "About you": ["age", "marital_status", "smoker"],
+        "Health and upcoming care": ["diagnosed_conditions"],
+        "Budget and priorities": ["budget_category", "priorities"],
+    }
+    if facts.get("diagnosed_conditions") == "yes":
+        groups["Health and upcoming care"].append("conditions")
+    missing = [
+        key
+        for values in groups.values()
+        for key in values
+        if facts.get(key) is None
+        or facts.get(key) == ""
+        or key in {"conditions", "priorities"} and not facts.get(key)
+    ]
+    return {
+        "mode": "challenge",
+        "groups": groups,
+        "missing": missing,
+        "ready": not missing,
+        "question": PROMPTS[missing[0]]
+        if missing
+        else "The compact judging profile is ready for deterministic comparison.",
+    }
+
+
 def readiness(facts: dict):
-    # Short intake answers remain authoritative when optional application details are added.
-    # A detailed-first profile still uses the extended checklist.
-    challenge_fields = {"age", "marital_status", "budget_category", "priorities"}
-    detailed_fields = {"legal_name", "date_of_birth", "nationality", "residency", "emirate", "payer"}
-    if any(facts.get(field) for field in challenge_fields) or not any(
-        facts.get(field) is not None for field in detailed_fields
-    ):
-        groups = {
-            "About you": ["age", "marital_status", "smoker"],
-            "Health and upcoming care": ["diagnosed_conditions"],
-            "Budget and priorities": ["budget_category", "priorities"],
-        }
-        if facts.get("diagnosed_conditions") == "yes":
-            groups["Health and upcoming care"].append("conditions")
-        missing = [
-            key for values in groups.values() for key in values
-            if facts.get(key) is None or facts.get(key) == "" or key in {"conditions", "priorities"} and not facts.get(key)
-        ]
-        return {
-            "mode": "challenge",
-            "groups": groups,
-            "missing": missing,
-            "ready": not missing,
-            "question": PROMPTS[missing[0]] if missing else "Your profile is ready. Compare the three fictional plans.",
-        }
+    """User-facing UAE application readiness used by the API and Helm assistant."""
     groups = {key: list(value) for key, value in QUESTION_GROUPS.items()}
     if facts.get("maternity"):
         groups["Health and cover"].append("maximum_maternity_wait")

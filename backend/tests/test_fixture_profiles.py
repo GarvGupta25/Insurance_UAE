@@ -3,8 +3,31 @@ from uuid import uuid4
 from conftest import as_assigned_broker
 
 from app.auth import User
-from app.contracts import Facts, readiness
+from app.contracts import Facts, challenge_readiness, readiness
 from app.domain import classify, compare, fixture_facts, source_data
+
+
+def fixture_application_facts(profile):
+    """Add synthetic UAE application fields without changing supplied judging facts."""
+    return {
+        **fixture_facts(profile),
+        "legal_name": profile["label"],
+        "date_of_birth": "1994-03-12",
+        "nationality": "Indian",
+        "residency": "resident",
+        "emirate": "Dubai",
+        "emirates_id_status": "issued",
+        "diagnosed_conditions": "yes" if profile["conditions"] else "no",
+        "smoker": "yes" if profile["smoker"] else "no",
+        "maternity": False,
+        "geography": "UAE",
+        "start_date": "2026-10-01",
+        "payer": "self",
+        "annual_budget": 25000,
+        "strict_budget": False,
+        "payment_frequency": "annual",
+        "immediate_chronic_cover": False if profile["conditions"] else None,
+    }
 
 
 def test_original_applicants_fit_the_typed_profile_without_leaking_future_outcomes():
@@ -37,21 +60,30 @@ def test_fixture_adapter_does_not_mutate_the_source_profile():
     assert profile["stated_priorities"] == ["ongoing coverage for existing conditions", "cost matters"]
 
 
-def test_optional_application_details_do_not_replace_a_ready_short_profile():
+def test_compact_judging_fixture_has_an_explicit_readiness_adapter():
     short = {
         "age": 32, "marital_status": "married", "smoker": "no",
         "diagnosed_conditions": "no", "budget_category": "moderate",
         "priorities": ["hospital access"],
     }
-    assert readiness(short)["ready"]
+    assert challenge_readiness(short)["ready"]
     expanded = {**short, "legal_name": "Demo Member", "payer": "self"}
-    assert readiness(expanded)["mode"] == "challenge"
-    assert readiness(expanded)["ready"]
+    assert challenge_readiness(expanded)["mode"] == "challenge"
+    assert challenge_readiness(expanded)["ready"]
+
+
+def test_user_facing_readiness_requires_the_uae_application_profile():
+    result = readiness({})
+    assert result["mode"] == "extended"
+    assert result["missing"][:6] == [
+        "legal_name", "date_of_birth", "nationality", "residency", "emirate", "emirates_id_status"
+    ]
+    assert "near_term_needs" in result["missing"]
 
 
 def test_diagnosis_answer_can_be_saved_before_condition_name():
     partial = Facts.model_validate({"diagnosed_conditions": "yes"}).model_dump()
-    assert readiness(partial)["missing"] == ["age", "marital_status", "smoker", "conditions", "budget_category", "priorities"]
+    assert "conditions" in readiness(partial)["missing"]
 
 
 def test_original_applicants_have_expected_deterministic_routing_and_recommendations():
@@ -76,12 +108,12 @@ def test_original_applicants_have_expected_deterministic_routing_and_recommendat
     assert "6-month waiting period" in p3_balanced["tradeoffs"][0]
 
 
-def test_original_applicants_can_get_real_quotations_without_identity_or_payment_details(fixture_client):
+def test_original_applicants_can_get_real_quotations_with_the_uae_application_profile(fixture_client):
     client, owner, engine = fixture_client
     expected = {"P1": "plan_a", "P2": "plan_c", "P3": "plan_b", "P4": "plan_b", "P5": "plan_c"}
     for profile in source_data()["profiles"]:
         owner[0] = User(str(uuid4()), f"{profile['id'].lower()}@example.test")
-        facts = fixture_facts(profile)
+        facts = fixture_application_facts(profile)
         assert readiness(facts)["ready"]
         current = client.get("/api/me/profile").json()
         saved = client.patch("/api/me/profile", json={"expected_version": current["version"], "changes": facts})

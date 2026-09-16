@@ -11,6 +11,29 @@ from app.models import Base, BrokerAssignment, Recommendation
 from app.services import assigned
 
 
+def application_facts(**overrides):
+    return {
+        "legal_name": "Amina Example",
+        "date_of_birth": "2000-03-12",
+        "nationality": "Indian",
+        "residency": "resident",
+        "emirate": "Dubai",
+        "emirates_id_status": "issued",
+        "diagnosed_conditions": "no",
+        "smoker": "no",
+        "maternity": False,
+        "geography": "UAE",
+        "start_date": "2026-10-01",
+        "near_term_needs": ["routine care"],
+        "payer": "self",
+        "annual_budget": 6000,
+        "strict_budget": True,
+        "payment_frequency": "annual",
+        "priorities": ["lowest premium"],
+        **overrides,
+    }
+
+
 def test_only_the_assigned_broker_can_open_a_member_recommendation():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -35,10 +58,7 @@ def test_only_the_assigned_broker_can_open_a_member_recommendation():
 
 def test_broker_queue_and_review_are_hidden_from_members_and_unassigned_brokers(fixture_client):
     client, owner, engine = fixture_client
-    facts = {
-        "age": 26, "marital_status": "single", "smoker": "no",
-        "diagnosed_conditions": "no", "budget_category": "low", "priorities": ["lowest premium"],
-    }
+    facts = application_facts()
     current = client.get("/api/me/profile").json()
     assert client.patch("/api/me/profile", json={"expected_version": current["version"], "changes": facts}).status_code == 200
     def send(path, body=None):
@@ -63,7 +83,7 @@ def test_broker_queue_and_review_are_hidden_from_members_and_unassigned_brokers(
 
 def test_broker_cannot_approve_a_recommendation_after_profile_change(fixture_client):
     client, owner, engine = fixture_client
-    facts = {"age": 26, "marital_status": "single", "smoker": "no", "diagnosed_conditions": "no", "budget_category": "low", "priorities": ["lowest premium"]}
+    facts = application_facts()
     current = client.get("/api/me/profile").json()
     assert client.patch("/api/me/profile", json={"expected_version": current["version"], "changes": facts}).status_code == 200
     def send(path, body=None):

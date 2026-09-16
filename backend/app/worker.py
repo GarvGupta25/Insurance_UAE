@@ -3,7 +3,6 @@
 import time
 from datetime import datetime, timedelta, timezone
 
-from langgraph.checkpoint.postgres import PostgresSaver
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -96,6 +95,8 @@ def work_once(compiled):
 
 def main():
     uri = settings().database_url.replace("postgresql+psycopg://", "postgresql://")
+    from langgraph.checkpoint.postgres import PostgresSaver
+
     with PostgresSaver.from_conn_string(uri) as saver:
         saver.setup()
         # Checkpoints can contain health context; never expose them through Supabase's browser API.
