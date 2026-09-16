@@ -61,7 +61,7 @@ export function VoiceInput({ available, onTranscript }: { available: boolean; on
     } catch { if (current === generation.current) { release(); setState('idle'); setError('Microphone access is unavailable. Check browser permission, or type your answer.'); } }
   }
   return <div className="voice-controls">
-    {state === 'idle' ? <button type="button" className="voice-button" onClick={start} disabled={!available} title={!available ? 'Configure Groq to enable voice transcription' : 'Speak your answer'}><Mic size={18}/> Speak</button> :
+    {state === 'idle' ? <button type="button" className="voice-button" onClick={start} disabled={!available} title={!available ? 'Configure Groq to enable voice transcription' : 'Speak your answer'} aria-label="Speak your answer and create a transcript"><Mic size={18}/> Speak</button> :
       <><button type="button" className="voice-button recording" onClick={() => recorder.current?.stop()} disabled={state !== 'recording'}>{state === 'recording' ? <Square size={16}/> : <LoaderCircle className="spin" size={16}/>} {state === 'recording' ? `Stop · ${seconds}s` : state === 'permission' ? 'Allow microphone…' : 'Transcribing…'}</button><button type="button" className="quiet" onClick={cancel} aria-label="Cancel recording or transcription"><X size={17}/></button></>}
     <span className="sr-only" aria-live="polite">{state === 'recording' ? 'Recording. Use Stop to finish.' : state}</span>
     {error && <p role="alert" className="inline-error">{error}</p>}
