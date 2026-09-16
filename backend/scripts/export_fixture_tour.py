@@ -5,7 +5,6 @@ from pathlib import Path
 
 from app.fixture_tour import run_fixture_tour
 
-
 OUT = Path(__file__).resolve().parents[2] / "docs" / "deliverable"
 
 
