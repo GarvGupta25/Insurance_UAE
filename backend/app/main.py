@@ -200,6 +200,62 @@ def public_sources(db: Session = Depends(session)):
     return {"items": result, "notice": "Public research links are separate from the fictional comparison. No live insurer price or eligibility has been verified."}
 
 
+from .public_assistant import (  # noqa: E402 — imported here to keep public block together
+    PublicAssistantRequest,
+    PublicAssistantResponse,
+    handle_public_assistant,
+)
+
+
+@app.post("/api/public/assistant/messages", response_model=PublicAssistantResponse)
+async def public_assistant(body: PublicAssistantRequest, request: Request) -> PublicAssistantResponse:
+    """Public, unauthenticated chatbot endpoint scoped to general UAE health-insurance
+    questions. Rate-limited to 10 requests per hour per IP. Never produces quotes or
+    eligibility decisions. Does not persist visitor messages."""
+    return await handle_public_assistant(body, request)
+
+
+@app.get("/api/public/providers")
+def public_providers():
+    """Public, unauthenticated access to the fictional provider directory for the Partners page."""
+    rows = [
+        {
+            "id": "demo-clinic",
+            "name": "Harbour Community Clinic",
+            "tier": "in_network_clinic",
+            "emirate": "Dubai",
+            "lat": 25.196,
+            "lng": 55.274,
+            "plans": ["plan_a", "plan_b", "plan_c"],
+        },
+        {
+            "id": "demo-hospital",
+            "name": "Crescent Private Hospital",
+            "tier": "private_hospital",
+            "emirate": "Dubai",
+            "lat": 25.212,
+            "lng": 55.291,
+            "plans": ["plan_b", "plan_c"],
+        },
+        {
+            "id": "demo-specialist",
+            "name": "Palm Specialist Hospital",
+            "tier": "premium_private_hospital",
+            "emirate": "Dubai",
+            "lat": 25.181,
+            "lng": 55.259,
+            "plans": ["plan_c"],
+        },
+    ]
+    return {
+        "items": [
+            dict(r, source="Synthetic provider directory v1", mode="synthetic_demo")
+            for r in rows
+        ],
+        "notice": "Fictional facilities and approximate demonstration locations. Not a real care directory.",
+    }
+
+
 @app.get("/api/me/access")
 def get_access(user: User = Depends(current_user)):
     return {"role": user.role}

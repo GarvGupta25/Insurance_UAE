@@ -7,10 +7,12 @@ app/contracts.py
 app/db.py
 app/documents.py
 app/domain.py
+app/explanations.py
 app/fixture_tour.py
 app/main.py
 app/models.py
 app/payments.py
+app/public_assistant.py
 app/services.py
 app/servicing.py
 app/sources.py
@@ -23,9 +25,11 @@ helm_api.egg-info/requires.txt
 helm_api.egg-info/top_level.txt
 tests/test_broker_assignment.py
 tests/test_broker_auth.py
+tests/test_explanations.py
 tests/test_fixture_profiles.py
 tests/test_fixture_tour.py
 tests/test_phase_one.py
+tests/test_public_assistant.py
 tests/test_servicing_api.py
 tests/test_servicing_domain.py
 tests/test_sources.py

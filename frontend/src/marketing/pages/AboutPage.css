@@ -1,0 +1,116 @@
+/* frontend/src/marketing/pages/AboutPage.css */
+
+.about-hero {
+  text-align: center;
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  align-items: center;
+  padding: var(--space-8) 0;
+}
+
+.about-hero h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  color: var(--color-ink-900);
+  margin: 0;
+}
+
+.about-hero p {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--color-ink-700);
+  margin: 0;
+}
+
+@media (min-width: 768px) {
+  .about-hero h1 {
+    font-size: 3rem;
+  }
+  .about-hero p {
+    font-size: 1.25rem;
+  }
+}
+
+.about-section-header {
+  text-align: center;
+  margin-bottom: var(--space-12);
+}
+
+.about-section-header h2 {
+  font-size: 1.75rem;
+  color: var(--color-ink-900);
+  margin-bottom: var(--space-2);
+}
+
+.about-section-header p {
+  color: var(--color-ink-500);
+  margin: 0;
+}
+
+.about-process-grid {
+  display: grid;
+  gap: var(--space-6);
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 768px) {
+  .about-process-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .about-process-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.about-step-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+}
+
+.about-step-number {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-accent);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.about-step-card p {
+  color: var(--color-ink-700);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.about-demo-card {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--space-8);
+  background: var(--color-surface-tint);
+  border: 1px solid var(--color-ink-100);
+}
+
+.about-demo-card h2 {
+  font-size: 1.75rem;
+  color: var(--color-ink-900);
+  margin: 0;
+}
+
+.about-demo-card p {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-ink-700);
+  margin: 0;
+}

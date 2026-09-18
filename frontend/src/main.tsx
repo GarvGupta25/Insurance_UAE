@@ -8,6 +8,21 @@ import { api, auth, configureAuth, type Config, aed } from './api';
 import { Dashboard, Intake, QuotePage, ApplicationPage, PolicyPage, Loading, ErrorView } from './Shopping';
 import { BrokerWorkspace } from './Broker';
 import './styles.css';
+import { MarketingLayout } from './marketing/components/MarketingLayout';
+import { HomePage } from './marketing/pages/HomePage';
+import { AboutPage } from './marketing/pages/AboutPage';
+import { PartnersPage } from './marketing/pages/PartnersPage';
+import { PlansPage } from './marketing/pages/PlansPage';
+import { PlanDetailPage } from './marketing/pages/PlanDetailPage';
+import { GuidePage } from './marketing/pages/GuidePage';
+import { GuideTopicPage } from './marketing/pages/GuideTopicPage';
+import { HowItWorksPage } from './marketing/pages/HowItWorksPage';
+import { FaqPage } from './marketing/pages/FaqPage';
+import { ClaimsExplainedPage } from './marketing/pages/ClaimsExplainedPage';
+import { ContactPage } from './marketing/pages/ContactPage';
+import { PrivacyPage } from './marketing/pages/PrivacyPage';
+import { TermsPage } from './marketing/pages/TermsPage';
+import { DisclaimerPage } from './marketing/pages/DisclaimerPage';
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
 
@@ -76,6 +91,37 @@ function App() {
   }, [config.data]);
   if (config.error) return <div className="startup-error"><Brand/><h1>The workspace service is unavailable.</h1><p>Start the Helm API, then reload this page.</p><ErrorView error={config.error}/><button onClick={() => { void config.refetch(); }}>Try again</button></div>;
   if (!config.data || !ready) return <Loading/>;
-  return <Routes><Route path="/" element={<Landing/>}/><Route path="/login" element={<Login session={session} config={config.data}/>}/><Route path="/app" element={<Shell session={session}/>}><Route index element={<Dashboard/>}/><Route path="intake/:caseId" element={<Intake config={config.data}/>}/><Route path="quotes/:quoteId" element={<QuotePage/>}/><Route path="applications/:applicationId" element={<ApplicationPage/>}/><Route path="broker" element={<BrokerWorkspace/>}/><Route path="policies/:policyId" element={<PolicyPage config={config.data}/>}/></Route><Route path="*" element={<Navigate to="/" replace/>}/></Routes>;
+  return <Routes>
+    {/* Marketing site — public, wrapped in MarketingLayout (header + footer) */}
+    <Route element={<MarketingLayout />}>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/about" element={<AboutPage />} />
+      <Route path="/partners" element={<PartnersPage />} />
+      <Route path="/plans" element={<PlansPage />} />
+      <Route path="/plans/:planId" element={<PlanDetailPage />} />
+      <Route path="/guide" element={<GuidePage />} />
+      <Route path="/guide/:topicSlug" element={<GuideTopicPage />} />
+      <Route path="/how-it-works" element={<HowItWorksPage />} />
+      <Route path="/faq" element={<FaqPage />} />
+      <Route path="/claims-explained" element={<ClaimsExplainedPage />} />
+      <Route path="/contact" element={<ContactPage />} />
+      <Route path="/legal/privacy" element={<PrivacyPage />} />
+      <Route path="/legal/terms" element={<TermsPage />} />
+      <Route path="/legal/disclaimer" element={<DisclaimerPage />} />
+    </Route>
+
+    {/* Authenticated app — untouched */}
+    <Route path="/login" element={<Login session={session} config={config.data}/>} />
+    <Route path="/app" element={<Shell session={session}/>}>
+      <Route index element={<Dashboard/>} />
+      <Route path="intake/:caseId" element={<Intake config={config.data}/>} />
+      <Route path="quotes/:quoteId" element={<QuotePage/>} />
+      <Route path="applications/:applicationId" element={<ApplicationPage/>} />
+      <Route path="broker" element={<BrokerWorkspace/>} />
+      <Route path="policies/:policyId" element={<PolicyPage config={config.data}/>} />
+    </Route>
+
+    <Route path="*" element={<Navigate to="/" replace/>} />
+  </Routes>;
 }
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><QueryClientProvider client={client}><BrowserRouter><App/></BrowserRouter></QueryClientProvider></React.StrictMode>);
