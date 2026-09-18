@@ -26,11 +26,17 @@ test('public journey is keyboard-accessible and labels the demonstration', async
   await stubPublicApi(page);
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Cover choices. Clear answers.' })).toBeVisible();
-  await expect(page.getByText('No real cover is sold.')).toBeVisible();
+  // Check new hero heading
+  await expect(page.getByRole('heading', { name: 'Individual health cover for UAE residents.' })).toBeVisible();
+  
+  // Check new demo product disclaimer
+  await expect(page.getByText('Demo product - plans and pricing shown are fictional, for illustration only.')).toBeVisible();
+  
+  // Check that fetched plans are rendering
   await expect(page.getByRole('heading', { name: 'Harbour Basic' })).toBeVisible();
 
-  await page.getByRole('link', { name: 'Find my cover' }).focus();
+  // Test the primary CTA link (Find my cover)
+  await page.getByRole('link', { name: 'Find my cover' }).first().focus();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByText('Account access is not configured yet.')).toBeVisible();
@@ -42,8 +48,17 @@ test('public landing stays usable at a mobile width', async ({ browser }) => {
   await stubPublicApi(page);
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Cover choices. Clear answers.' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Your workspace' })).toBeVisible();
+  // Check hero heading
+  await expect(page.getByRole('heading', { name: 'Individual health cover for UAE residents.' })).toBeVisible();
+  
+  // Desktop nav should be hidden on mobile
   await expect(page.getByRole('navigation', { name: 'Main navigation' })).not.toBeVisible();
+
+  // Click the hamburger menu to open mobile panel
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+
+  // Now "Sign in" should be visible
+  await expect(page.getByRole('link', { name: 'Sign in' }).first()).toBeVisible();
+
   await context.close();
 });
