@@ -30,19 +30,32 @@ class CheckpointReview(BaseModel):
     edits: dict = Field(default_factory=dict)
 
 
-def checkpoint_one_approved(db: Session, application: MarketplaceApplication) -> bool:
+def checkpoint_one_approved_for_case(db: Session, case_id: str) -> bool:
     return (
         db.scalar(
             select(ReviewDecision.id)
             .join(Recommendation, ReviewDecision.recommendation_id == Recommendation.id)
             .where(
-                Recommendation.case_id == application.case_id,
+                Recommendation.case_id == case_id,
                 Recommendation.status == "approved",
                 ReviewDecision.action.in_(("approve", "edit")),
             )
         )
         is not None
     )
+
+
+def checkpoint_one_approved(db: Session, application: MarketplaceApplication) -> bool:
+    return checkpoint_one_approved_for_case(db, application.case_id)
+
+
+def advance_to_providers(db: Session, application: MarketplaceApplication) -> None:
+    """Apply the Phase 3 API guard from every provider-send path."""
+    if application.status != "broker_approved":
+        raise HTTPException(409, "Only a broker-approved application can be sent to a provider.")
+    if not checkpoint_one_approved(db, application):
+        raise HTTPException(403, "Checkpoint 1 approval is required before provider submission.")
+    application.status = "sent_to_providers"
 
 
 def checkpoint_two_approved(db: Session, application: MarketplaceApplication) -> bool:
@@ -232,11 +245,7 @@ def send_to_providers(
     db: Session = Depends(session),
 ):
     application = assigned(db, MarketplaceApplication, application_id, user, lock=True)
-    if application.status != "broker_approved":
-        raise HTTPException(409, "Only a broker-approved application can be sent to a provider.")
-    if not checkpoint_one_approved(db, application):
-        raise HTTPException(403, "Checkpoint 1 approval is required before provider submission.")
-    application.status = "sent_to_providers"
+    advance_to_providers(db, application)
     db.commit()
     return {"id": application.id, "status": application.status}
 

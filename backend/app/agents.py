@@ -6,6 +6,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .config import settings
 from .contracts import PROMPTS, Facts
+from .domain import evaluate_servicing
 
 NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
 
@@ -462,6 +463,174 @@ def policy_assistant(state: AgentState) -> dict:
         "result": {"reply": reply, "patch": {}, "mode": "groq", "sources": sources},
         "_next": "end",
     }
+
+
+def _catalogue_item(item: dict) -> tuple[dict, dict]:
+    """Return catalogue metadata and terms without coupling ranking to the ORM."""
+    terms = item.get("terms", item)
+    return item, terms
+
+
+def _coverage_checks(profile: dict, plan: dict) -> list[dict]:
+    needs = " ".join(profile.get("near_term_needs") or []).casefold()
+    checks = [("general", 0, True)]
+    if profile.get("maternity") or "maternity" in needs:
+        usable_month = profile.get("maximum_maternity_wait")
+        if usable_month is None:
+            raise ValueError("A maternity timing preference is required before matching.")
+        if "within 12 months" in needs:
+            usable_month = min(usable_month, 11)
+        checks.append(("maternity", usable_month, False))
+    if profile.get("diagnosed_conditions") == "yes":
+        usable_month = 0 if profile.get("immediate_chronic_cover") or "continuous chronic" in needs else 12
+        checks.append(("chronic_preexisting", usable_month, False))
+
+    geography = "abroad" if profile.get("geography") in {"international", "unsure"} else "domestic"
+    decisions = []
+    for benefit, usable_month, completeness_only in checks:
+        decision = evaluate_servicing(
+            plan,
+            {
+                "id": f"catalogue-{benefit}",
+                "kind": "preauth",
+                "policy_month": usable_month,
+                "benefit_class": benefit,
+                "provider_tier": "in_network_clinic",
+                "geography": geography,
+                "estimated_amount": 1000,
+            },
+        )
+        decisions.append(
+            {
+                "benefit": benefit,
+                "usable_month": usable_month,
+                "completeness_only": completeness_only,
+                "outcome": decision["outcome"],
+                "reason_code": decision["reason_code"],
+            }
+        )
+    return decisions
+
+
+def rank_catalogue_plans(profile: dict, catalogue: list[dict]) -> list[dict]:
+    """Rank catalogue plans deterministically; model calls never influence the score."""
+    budget = profile.get("annual_budget")
+    if budget is None:
+        raise ValueError("An annual budget is required before matching.")
+    priorities = " ".join(profile.get("priorities") or []).casefold()
+    preferred_network = profile.get("preferred_network")
+    if not preferred_network:
+        preferred_network = "wide" if "wide" in priorities else "standard" if "network" in priorities else None
+    tiers = {"restricted": 0, "standard": 1, "wide": 2}
+    ranked = []
+
+    for item in catalogue:
+        metadata, plan = _catalogue_item(item)
+        try:
+            premium = int(plan["annual_premium"])
+            network = plan["network"]
+            provider_id = str(metadata["provider_id"])
+            plan_id = str(metadata.get("id") or plan.get("id") or metadata["plan_code"])
+            if network not in tiers or not provider_id or not plan_id:
+                continue
+            checks = _coverage_checks(profile, plan)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if any(check["outcome"] == "insufficient_data" for check in checks):
+            continue
+
+        if budget == 0:
+            price_score = 35.0 if premium == 0 else 0.0
+        else:
+            price_score = round(max(0.0, 35.0 * (2 - premium / budget)), 2)
+            price_score = min(35.0, price_score)
+
+        coverage_score = 40.0
+        fit_checks = [check for check in checks if not check["completeness_only"]]
+        if fit_checks:
+            coverage_score = round(
+                40.0 * sum(check["outcome"].startswith("approved") for check in fit_checks) / len(fit_checks),
+                2,
+            )
+
+        if preferred_network is None:
+            network_score = 25.0
+        else:
+            tier_gap = tiers[network] - tiers[preferred_network]
+            network_score = 25.0 if tier_gap >= 0 else 12.5 if tier_gap == -1 else 0.0
+
+        ranked.append(
+            {
+                "plan_id": plan_id,
+                "plan_code": str(metadata.get("plan_code") or plan.get("id") or plan_id),
+                "provider_id": provider_id,
+                "provider_name": metadata.get("provider_name"),
+                "name": metadata.get("name") or plan.get("name"),
+                "premium_aed": premium,
+                "score": round(price_score + coverage_score + network_score, 2),
+                "factors": {
+                    "price": {
+                        "score": price_score,
+                        "maximum": 35.0,
+                        "budget_aed": budget,
+                        "premium_aed": premium,
+                    },
+                    "coverage": {"score": coverage_score, "maximum": 40.0, "checks": checks},
+                    "network": {
+                        "score": network_score,
+                        "maximum": 25.0,
+                        "requested": preferred_network,
+                        "offered": network,
+                    },
+                },
+            }
+        )
+
+    ranked.sort(key=lambda row: (-row["score"], row["premium_aed"], row["provider_id"], row["plan_id"]))
+    top_five = ranked[:5]
+    for position, row in enumerate(top_five, 1):
+        row["rank"] = position
+    return top_five
+
+
+def explain_catalogue_ranking(ranked: list[dict]) -> list[dict]:
+    """Explain one fixed ranking with one model call; never return model-edited figures."""
+    if not settings().groq_api_key:
+        return [
+            {
+                "plan_id": row["plan_id"],
+                "explanation": (
+                    f"This plan scored {row['score']} from its price, coverage and network fit."
+                ),
+            }
+            for row in ranked
+        ]
+    response = _client().chat.completions.create(
+        model=settings().groq_model,
+        temperature=0,
+        response_format={"type": "json_object"},
+        max_tokens=1200,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Do not change the ranking, the premiums, or any figure - your only job is to "
+                    "explain, in plain language, why each of these 5 plans is here, using only the "
+                    "factors provided. Return JSON as {\"explanations\":[{\"plan_id\":...,"
+                    "\"explanation\":...}]}, once for each supplied plan and in the same order."
+                ),
+            },
+            {"role": "user", "content": json.dumps(ranked)},
+        ],
+    )
+    body = json.loads(response.choices[0].message.content or "{}")
+    explanations = body.get("explanations")
+    expected = [row["plan_id"] for row in ranked]
+    if not isinstance(explanations, list) or [item.get("plan_id") for item in explanations] != expected:
+        raise ValueError("The assistant returned explanations for a different ranking.")
+    if any(not isinstance(item.get("explanation"), str) or not item["explanation"].strip() for item in explanations):
+        raise ValueError("The assistant returned an invalid ranking explanation.")
+    return [{"plan_id": item["plan_id"], "explanation": item["explanation"].strip()} for item in explanations]
 
 
 def _route(state: AgentState) -> str:

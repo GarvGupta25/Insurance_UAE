@@ -45,6 +45,7 @@ from .domain import (
     reassess_fit,
 )
 from .marketplace_broker import marketplace_worklist_items, router as marketplace_broker_router
+from .marketplace_matching import router as marketplace_matching_router
 from .models import (
     Application,
     Audit,
@@ -75,6 +76,7 @@ from .voice import validate_audio
 
 app = FastAPI(title="Helm AI", version="0.1.0")
 app.include_router(marketplace_broker_router)
+app.include_router(marketplace_matching_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings().allowed_origins,
