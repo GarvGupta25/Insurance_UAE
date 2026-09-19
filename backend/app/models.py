@@ -166,9 +166,15 @@ class Recommendation(Owned, Base):
 
 class ReviewDecision(Owned, Base):
     __tablename__ = "review_decisions"
+    __table_args__ = (UniqueConstraint("marketplace_application_id", "checkpoint"),)
+
     recommendation_id: Mapped[str | None] = mapped_column(ForeignKey("recommendations.id"), nullable=True)
     servicing_event_id: Mapped[str | None] = mapped_column(ForeignKey("servicing_events.id"), nullable=True)
     reassessment_id: Mapped[str | None] = mapped_column(ForeignKey("policy_reassessments.id"), nullable=True)
+    marketplace_application_id: Mapped[str | None] = mapped_column(
+        ForeignKey("marketplace_applications.id"), nullable=True
+    )
+    checkpoint: Mapped[str | None] = mapped_column(String(24), nullable=True)
     action: Mapped[str] = mapped_column(String(32))
     note: Mapped[str] = mapped_column(String(2000), default="")
     before: Mapped[dict] = mapped_column(JSON, default=dict)

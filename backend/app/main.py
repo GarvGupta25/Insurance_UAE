@@ -44,6 +44,7 @@ from .domain import (
     plans,
     reassess_fit,
 )
+from .marketplace_broker import marketplace_worklist_items, router as marketplace_broker_router
 from .models import (
     Application,
     Audit,
@@ -73,6 +74,7 @@ from .sources import registry
 from .voice import validate_audio
 
 app = FastAPI(title="Helm AI", version="0.1.0")
+app.include_router(marketplace_broker_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings().allowed_origins,
@@ -684,7 +686,16 @@ def broker_worklist(user: User = Depends(require_broker), db: Session = Depends(
     for row in reassessments:
         age_days = max(0, (current - row.created_at).days)
         items.append({"id": row.id, "item_type": "reassessment", "applicant_id": row.owner_id, "case_id": None, "age_days": age_days, "amount_aed": 0, "priority_reason": f"{age_days} day(s) unresolved; policy-fit review needed."})
-    urgency = {"appeal": 0, "insufficient_data": 0, "recommendation": 1, "reassessment": 1}
+    items.extend(marketplace_worklist_items(db, user, current))
+    urgency = {
+        "appeal": 0,
+        "insufficient_data": 0,
+        "marketplace_checkpoint_1": 0,
+        "marketplace_checkpoint_2": 0,
+        "provider_flag": 0,
+        "recommendation": 1,
+        "reassessment": 1,
+    }
     items.sort(key=lambda item: (-item["age_days"], urgency[item["item_type"]], -item["amount_aed"], item["id"]))
     for rank, item in enumerate(items, 1):
         item["priority_rank"] = rank
