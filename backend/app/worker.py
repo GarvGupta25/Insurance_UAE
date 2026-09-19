@@ -58,6 +58,7 @@ def work_once(compiled):
         state = {
             "text": message.text,
             "facts": facts,
+            "message_id": message.id,
             "context": {
                 **message.details.get("context", {}),
                 "conversation": [{"role": item.role, "text": item.text} for item in recent_messages],
@@ -66,7 +67,7 @@ def work_once(compiled):
         db.commit()
     try:
         output = compiled.invoke(
-            state, {"configurable": {"thread_id": f"{owner_id}:{case_id}"}, "recursion_limit": 8}
+            state, {"configurable": {"thread_id": f"{owner_id}:{case_id}"}, "recursion_limit": 64}
         )["result"]
         status = "complete"
     except Exception:

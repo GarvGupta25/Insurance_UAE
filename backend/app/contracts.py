@@ -118,6 +118,7 @@ PROMPTS = {
     "maternity": "Would you like maternity benefits included?",
     "geography": "Do you need cover within the UAE or internationally?",
     "start_date": "When would you like the policy to begin?",
+    "near_term_needs": "What care do you expect to need soon? You can say none.",
     "payer": "Who will pay: you, an employer, or another sponsor?",
     "annual_budget": "What is your annual budget in AED?",
     "strict_budget": "Is that a strict maximum, or a flexible preference?",
