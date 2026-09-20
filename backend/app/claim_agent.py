@@ -6,7 +6,9 @@ uses upload metadata supplied by that client; it is not OCR.
 """
 
 import json
+import re
 from decimal import Decimal
+from statistics import median
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -28,6 +30,7 @@ from .models import (
     Policy,
     Profile,
     ReviewDecision,
+    ServicingEvent,
 )
 from .services import command, own
 from .servicing import record_financial_event
@@ -85,6 +88,30 @@ CLAIM_REVIEW_ACTIONS = {
     "request_more_information",
     "deny",
     "escalate_to_senior_broker",
+}
+EMERGENCY_GUIDANCE = (
+    "You don't need pre-authorization for this — UAE emergency rules require the hospital to treat and "
+    "stabilize you first, and cover applies retroactively once the emergency is confirmed. Get the care "
+    "you need. I'm alerting our team now so the paperwork can be handled without you doing anything else tonight."
+)
+EMERGENCY_TERMS = (
+    "chest pain",
+    "accident",
+    "ambulance",
+    "emergency room",
+    "admitted",
+    "bleeding",
+    "unconscious",
+    "cannot breathe",
+    "can't breathe",
+    "severe injury",
+)
+REGULATORY_TIMERS = {
+    "pre_auth_outpatient": "Insurer/TPA response target: within 6 hours.",
+    "pre_auth_inpatient": "Insurer/TPA response target: within 24 hours.",
+    "emergency": "No prior authorization is required; stabilization comes first. Post-approval processing target: 7 working days.",
+    "claim": "Settlement target: within 45 calendar days of submission.",
+    "reimbursement": "Settlement target: within 45 calendar days; resubmissions within 30 days.",
 }
 
 
@@ -144,6 +171,16 @@ class FreeFormClaimIntake(BaseModel):
 
     message: Annotated[str, Field(min_length=1, max_length=4000)]
     documents: list[ClaimDocumentInput] = Field(default_factory=list, max_length=20)
+    explicit_emergency: bool = False
+
+
+class AppealDraftInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    contested_event_id: Annotated[str, Field(min_length=1, max_length=80)]
+    new_evidence: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(
+        min_length=1, max_length=20
+    )
 
 
 def _has_value(value) -> bool:
@@ -257,6 +294,43 @@ def _extract_free_form(message: str) -> dict:
     return extracted
 
 
+def _is_emergency(message: str) -> bool:
+    normalized = re.sub(r"\s+", " ", message.casefold())
+    return bool(re.search(r"\ber\b", normalized)) or any(term in normalized for term in EMERGENCY_TERMS)
+
+
+def _send_emergency_alert(intake_id: str) -> bool:
+    """Deliberately inert until a real provider and staffed on-call process exist."""
+    if not settings().send_real_emergency_alert:
+        return False
+    raise NotImplementedError(
+        f"Emergency alert integration is enabled for {intake_id}, but no approved provider is configured."
+    )
+
+
+def create_emergency_intake(db: Session, policy_id: str, message: str) -> dict:
+    intake = ClaimIntake(
+        policy_id=policy_id,
+        kind="emergency",
+        raw_message=message,
+        structured_fields={"claim_agent_response": EMERGENCY_GUIDANCE},
+        is_emergency=True,
+    )
+    db.add(intake)
+    db.flush()
+    _flag(db, intake.id, "emergency", "Emergency intake requires immediate human follow-up.")
+    alert_sent = _send_emergency_alert(intake.id)
+    return {
+        "intake_id": intake.id,
+        "kind": "emergency",
+        "is_emergency": True,
+        "route": "review",
+        "message": EMERGENCY_GUIDANCE,
+        "alert_sent": alert_sent,
+        "regulatory_timeline": REGULATORY_TIMERS["emergency"],
+    }
+
+
 def create_free_form_intake(
     db: Session, policy_id: str, body: FreeFormClaimIntake
 ) -> dict:
@@ -313,6 +387,57 @@ def _flag(db: Session, intake_id: str, flag_type: str, reason: str) -> None:
         db.add(ClaimFlag(claim_intake_id=intake_id, flag_type=flag_type, reason=reason))
 
 
+def _flag_explainable_anomalies(db: Session, intake: ClaimIntake) -> None:
+    fields = intake.structured_fields
+    amount_field = AMOUNT_FIELDS[intake.kind]
+    amount = fields.get(amount_field)
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+        return
+    prior = db.scalars(
+        select(ClaimIntake).where(
+            ClaimIntake.policy_id == intake.policy_id,
+            ClaimIntake.id != intake.id,
+            ClaimIntake.kind == intake.kind,
+        )
+    ).all()
+    comparable = [
+        row
+        for row in prior
+        if row.structured_fields.get("benefit_class") == fields.get("benefit_class")
+    ]
+    duplicate = next(
+        (
+            row
+            for row in comparable
+            if row.structured_fields.get("provider_name") == fields.get("provider_name")
+            and row.structured_fields.get(amount_field) == amount
+            and abs((intake.created_at - row.created_at).days) <= 7
+        ),
+        None,
+    )
+    if duplicate:
+        _flag(
+            db,
+            intake.id,
+            "anomaly",
+            "A claim with the same provider, benefit class, and amount was submitted within 7 days.",
+        )
+        return
+    amounts = [
+        row.structured_fields.get(amount_field)
+        for row in comparable
+        if isinstance(row.structured_fields.get(amount_field), (int, float))
+        and not isinstance(row.structured_fields.get(amount_field), bool)
+    ]
+    if len(amounts) >= 3 and amount > 3 * median(amounts):
+        _flag(
+            db,
+            intake.id,
+            "anomaly",
+            f"AED {amount:g} is more than three times the median for this benefit class (AED {median(amounts):g}).",
+        )
+
+
 def _missing_intake_data(intake: ClaimIntake) -> list[str]:
     fields = intake.structured_fields
     amount_field = AMOUNT_FIELDS[intake.kind]
@@ -363,6 +488,7 @@ def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_resul
     if missing:
         _flag(db, intake.id, "missing_docs", f"Missing intake fields: {', '.join(missing)}.")
         return {**intake_result, "route": "review"}
+    _flag_explainable_anomalies(db, intake)
     if db.scalar(
         select(ClaimFlag.id).where(ClaimFlag.claim_intake_id == intake.id, ClaimFlag.status == "open")
     ):
@@ -441,6 +567,8 @@ def free_form_intake(
     policy = own(db, Policy, policy_id, user, lock=True)
 
     def action():
+        if body.explicit_emergency or _is_emergency(body.message):
+            return create_emergency_intake(db, policy_id, body.message)
         result = create_free_form_intake(db, policy_id, body)
         return result if result["intake_id"] is None else route_claim_intake(db, policy, result["intake_id"], result)
 
@@ -453,10 +581,228 @@ def free_form_intake(
     )
 
 
+@router.post("/{claim_intake_id}/complete")
+def complete_emergency_intake(
+    policy_id: str,
+    claim_intake_id: str,
+    body: StructuredClaimIntake,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    policy = own(db, Policy, policy_id, user, lock=True)
+    intake = db.scalar(
+        select(ClaimIntake)
+        .where(ClaimIntake.id == claim_intake_id, ClaimIntake.policy_id == policy.id)
+        .with_for_update()
+    )
+    if intake is None:
+        raise HTTPException(404, "Claim intake not found.")
+
+    def action():
+        if not intake.is_emergency or intake.kind != "emergency":
+            raise HTTPException(422, "Only an emergency intake awaiting documentation can use this action.")
+        fields = body.model_dump(mode="json", exclude={"kind", "documents"})
+        intake.kind = body.kind
+        intake.structured_fields = {
+            **fields,
+            "claim_agent_response": EMERGENCY_GUIDANCE,
+            "emergency_origin": True,
+        }
+        missing = _document_completeness(db, intake, body.documents)
+        if missing:
+            _flag(db, intake.id, "missing_docs", "Required claim documents are incomplete or missing.")
+            return {
+                "intake_id": intake.id,
+                "kind": intake.kind,
+                "completeness_ok": False,
+                "missing": missing,
+                "route": "review",
+            }
+        emergency_flags = db.scalars(
+            select(ClaimFlag).where(
+                ClaimFlag.claim_intake_id == intake.id,
+                ClaimFlag.flag_type == "emergency",
+                ClaimFlag.status == "open",
+            )
+        ).all()
+        for flag in emergency_flags:
+            flag.status = "reviewed"
+        result = {
+            "intake_id": intake.id,
+            "kind": intake.kind,
+            "structured_fields": intake.structured_fields,
+            "completeness_ok": True,
+            "missing": [],
+        }
+        return route_claim_intake(db, policy, intake.id, result)
+
+    return command(
+        db,
+        user,
+        idempotency_key,
+        {
+            "action": "complete_emergency_claim_intake",
+            "policy_id": policy_id,
+            "claim_intake_id": claim_intake_id,
+            **body.model_dump(mode="json"),
+        },
+        action,
+    )
+
+
+def _timeline_for(intake: ClaimIntake, flags: list[ClaimFlag], decision: ServicingEvent | None) -> dict:
+    if intake.is_emergency:
+        timer = REGULATORY_TIMERS["emergency"]
+    elif intake.kind == "pre_auth":
+        setting = intake.structured_fields.get("setting", "outpatient")
+        timer = REGULATORY_TIMERS[f"pre_auth_{setting}"]
+    else:
+        timer = REGULATORY_TIMERS.get(intake.kind, REGULATORY_TIMERS["claim"])
+    if decision and decision.outcome != "insufficient_data":
+        stage = "decision_recorded"
+    elif any(flag.status == "open" for flag in flags):
+        stage = "human_review"
+    else:
+        stage = "intake_received"
+    return {
+        "stage": stage,
+        "target": timer,
+        "steps": [
+            {"name": "Intake received", "complete": True},
+            {"name": "Completeness checked", "complete": bool(flags) or decision is not None},
+            {"name": "Human review", "complete": stage == "decision_recorded", "active": stage == "human_review"},
+            {"name": "Decision recorded", "complete": stage == "decision_recorded"},
+        ],
+    }
+
+
+@router.get("")
+def member_claim_intakes(
+    policy_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+):
+    policy = own(db, Policy, policy_id, user)
+    intakes = db.scalars(
+        select(ClaimIntake)
+        .where(ClaimIntake.policy_id == policy.id)
+        .order_by(ClaimIntake.created_at.desc())
+    ).all()
+    rows = []
+    for intake in intakes:
+        flags = db.scalars(
+            select(ClaimFlag)
+            .where(ClaimFlag.claim_intake_id == intake.id)
+            .order_by(ClaimFlag.created_at, ClaimFlag.id)
+        ).all()
+        event_id = intake.structured_fields.get("servicing_event_id")
+        decision = db.get(ServicingEvent, event_id) if isinstance(event_id, str) else None
+        rows.append(
+            {
+                "id": intake.id,
+                "kind": intake.kind,
+                "is_emergency": intake.is_emergency,
+                "created_at": intake.created_at.isoformat(),
+                "timeline": _timeline_for(intake, flags, decision),
+                "flags": [
+                    {"flag_type": flag.flag_type, "reason": flag.reason, "status": flag.status}
+                    for flag in flags
+                ],
+                "decision": (
+                    {
+                        "event_id": decision.root_id,
+                        "outcome": decision.outcome,
+                        "calculation": decision.calculation,
+                    }
+                    if decision
+                    else None
+                ),
+                "why_not_black_box": (
+                    "Helm's Claim Agent routes and explains; it never sets approval or payment amounts. "
+                    "Every result below comes from the saved policy terms and the deterministic calculation trace."
+                ),
+            }
+        )
+    return rows
+
+
+def _draft_appeal(event: ServicingEvent, evidence: list[str]) -> str:
+    fallback = (
+        f"I am appealing claim {event.root_id}, decided with reason code {event.reason_code}. "
+        f"Please review this new evidence: {'; '.join(evidence)}."
+    )
+    cfg = settings()
+    if not cfg.groq_api_key:
+        return fallback
+    prompt = {
+        "event_id": event.root_id,
+        "reason_code": event.reason_code,
+        "calculation": event.calculation,
+        "new_evidence": evidence,
+    }
+    instruction = (
+        "Draft a concise first-person insurance appeal. State the exact reason_code and include every evidence "
+        "item supplied. Do not add facts, evidence, an outcome, or a payment amount. Return JSON with key statement."
+    )
+    try:
+        response = Groq(api_key=cfg.groq_api_key, timeout=20, max_retries=0).chat.completions.create(
+            model=cfg.groq_model,
+            temperature=0,
+            response_format={"type": "json_object"},
+            max_tokens=500,
+            messages=[
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+        )
+        result = json.loads(response.choices[0].message.content or "{}")
+        statement = result.get("statement") if isinstance(result, dict) else None
+    except (GroqError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return fallback
+    if (
+        not isinstance(statement, str)
+        or event.reason_code not in statement
+        or any(item not in statement for item in evidence)
+    ):
+        return fallback
+    return statement[:2000]
+
+
+@router.post("/appeal-draft")
+def appeal_draft(
+    policy_id: str,
+    body: AppealDraftInput,
+    user: User = Depends(current_user),
+    db: Session = Depends(session),
+):
+    policy = own(db, Policy, policy_id, user)
+    event = db.scalar(
+        select(ServicingEvent)
+        .where(
+            ServicingEvent.policy_id == policy.id,
+            ServicingEvent.root_id == body.contested_event_id,
+            ServicingEvent.record_type.in_(["decision", "revision"]),
+        )
+        .order_by(ServicingEvent.sequence.desc())
+    )
+    if event is None or event.kind not in {"claim", "reimbursement"} or event.outcome != "denied":
+        raise HTTPException(422, "Appeal drafting requires a currently denied claim or reimbursement.")
+    return {
+        "contested_event_id": event.root_id,
+        "contested_reason_code": event.reason_code,
+        "statement": _draft_appeal(event, body.new_evidence),
+        "evidence": body.new_evidence,
+    }
+
+
 def _claim_transcript(intake: ClaimIntake) -> list[dict]:
     transcript = []
     if intake.raw_message:
         transcript.append({"role": "member", "content": intake.raw_message})
+    emergency_response = intake.structured_fields.get("claim_agent_response")
+    if intake.is_emergency and isinstance(emergency_response, str):
+        transcript.append({"role": "claim_agent", "content": emergency_response})
     follow_up = intake.structured_fields.get("follow_up")
     if isinstance(follow_up, str) and follow_up:
         transcript.append({"role": "claim_agent", "content": follow_up})
@@ -591,6 +937,36 @@ def broker_claims(
     return sorted(items, key=lambda item: (not item["is_emergency"], item["created_at"]))
 
 
+@broker_router.get("/analytics")
+def claim_analytics(
+    user: User = Depends(require_broker),
+    db: Session = Depends(session),
+):
+    intakes = db.scalars(
+        select(ClaimIntake)
+        .join(Policy, Policy.id == ClaimIntake.policy_id)
+        .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+        .where(
+            BrokerAssignment.broker_id == user.id,
+            ClaimIntake.kind.in_(["pre_auth", "claim", "reimbursement"]),
+        )
+    ).all()
+    straight_through = 0
+    for intake in intakes:
+        has_flags = db.scalar(
+            select(ClaimFlag.id).where(ClaimFlag.claim_intake_id == intake.id)
+        )
+        if not has_flags and isinstance(intake.structured_fields.get("servicing_event_id"), str):
+            straight_through += 1
+    total = len(intakes)
+    return {
+        "total_intakes": total,
+        "straight_through": straight_through,
+        "straight_through_rate_pct": round(straight_through * 100 / total, 1) if total else 0.0,
+        "definition": "Decisive servicing decisions completed without any claim flag or human review.",
+    }
+
+
 @broker_router.post("/{claim_intake_id}/review")
 def review_claim(
     claim_intake_id: str,
@@ -629,6 +1005,10 @@ def review_claim(
             if decision["outcome"] == "insufficient_data":
                 raise HTTPException(422, "The servicing engine requires more verified information.")
             servicing_event_id = decision["id"]
+            intake.structured_fields = {
+                **intake.structured_fields,
+                "servicing_event_id": servicing_event_id,
+            }
 
         before = {
             "claim_intake_id": intake.id,

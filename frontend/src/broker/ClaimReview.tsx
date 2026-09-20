@@ -33,6 +33,7 @@ function show(value: unknown) {
 export function ClaimReview() {
   const query = useQueryClient();
   const claims = useQuery<Claim[]>({ queryKey: ['broker-claims'], queryFn: () => api('/api/broker/claims') });
+  const analytics = useQuery<{ total_intakes: number; straight_through: number; straight_through_rate_pct: number; definition: string }>({ queryKey: ['broker-claim-analytics'], queryFn: () => api('/api/broker/claims/analytics') });
   const [selectedId, setSelectedId] = useState('');
   const [actions, setActions] = useState<Record<string, ReviewAction>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -62,6 +63,7 @@ export function ClaimReview() {
 
   return <>
     <div className="page-heading compact"><div><span className="eyebrow">BROKER CLAIM REVIEW</span><h1>Review flagged claims.<br/>Keep every decision human.</h1><p>Emergency claims stay first. Claim Agent suggestions are drafts; edit and confirm the action yourself.</p></div><FileText className="heading-icon" size={54}/></div>
+    {analytics.data && <section className="claim-analytics" aria-label="Claim straight-through performance"><span>Claim straight-through rate</span><strong>{analytics.data.straight_through_rate_pct}%</strong><small>{analytics.data.straight_through} of {analytics.data.total_intakes} intakes · {analytics.data.definition}</small></section>}
     {message && <div className="notice" role="status">{message}</div>}
     {error && <ErrorView error={new Error(error)}/>} 
     {!rows.length ? <div className="empty-state"><Check size={32}/><h3>No flagged claims need review.</h3><p>New assigned claims with open flags will appear here.</p></div> : <div className="claim-review-layout">

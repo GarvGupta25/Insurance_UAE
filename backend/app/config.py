@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "openai/gpt-oss-20b"
     groq_stt_model: str = "whisper-large-v3"
+    send_real_emergency_alert: bool = False
     document_encryption_key: str = ""
     payment_provider: str = "simulator"
     razorpay_key_id: str = ""
