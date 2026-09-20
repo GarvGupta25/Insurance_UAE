@@ -9,17 +9,26 @@ import json
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
 from groq import Groq, GroqError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .auth import User, current_user
+from .auth import User, current_user, require_broker
 from .config import settings
 from .db import session
 from .explanations import servicing_explanation
-from .models import ClaimDocument, ClaimFlag, ClaimIntake, Policy
+from .models import (
+    Audit,
+    BrokerAssignment,
+    ClaimDocument,
+    ClaimFlag,
+    ClaimIntake,
+    Policy,
+    Profile,
+    ReviewDecision,
+)
 from .services import command, own
 from .servicing import record_financial_event
 
@@ -27,6 +36,7 @@ ClaimKind = Literal["pre_auth", "claim", "reimbursement"]
 DocumentType = Literal["bill", "discharge_summary", "prescription", "other"]
 
 router = APIRouter(prefix="/api/policies/{policy_id}/claim-intakes", tags=["claim-intakes"])
+broker_router = APIRouter(prefix="/api/broker/claims", tags=["broker-claims"])
 
 REQUIRED_DOCUMENTS: dict[str, tuple[str, ...]] = {
     "pre_auth": ("prescription",),
@@ -62,6 +72,20 @@ AMOUNT_FIELDS = {
     "pre_auth": "estimated_amount",
     "reimbursement": "amount_paid_by_member",
 }
+ClaimReviewAction = Literal[
+    "approve",
+    "partially_approve",
+    "request_more_information",
+    "deny",
+    "escalate_to_senior_broker",
+]
+CLAIM_REVIEW_ACTIONS = {
+    "approve",
+    "partially_approve",
+    "request_more_information",
+    "deny",
+    "escalate_to_senior_broker",
+}
 
 
 class ClaimDocumentInput(BaseModel):
@@ -76,6 +100,13 @@ class ClaimDocumentInput(BaseModel):
         if any(len(key) > 80 or isinstance(item, str) and len(item) > 1000 for key, item in value.items()):
             raise ValueError("Document metadata keys or values are too long.")
         return value
+
+
+class ClaimReviewInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: ClaimReviewAction
+    note: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
 class StructuredClaimIntake(BaseModel):
@@ -418,5 +449,237 @@ def free_form_intake(
         user,
         idempotency_key,
         {"action": "free_form_claim_intake", "policy_id": policy_id, **body.model_dump(mode="json")},
+        action,
+    )
+
+
+def _claim_transcript(intake: ClaimIntake) -> list[dict]:
+    transcript = []
+    if intake.raw_message:
+        transcript.append({"role": "member", "content": intake.raw_message})
+    follow_up = intake.structured_fields.get("follow_up")
+    if isinstance(follow_up, str) and follow_up:
+        transcript.append({"role": "claim_agent", "content": follow_up})
+    return transcript
+
+
+def _suggested_claim_action(claim: dict) -> dict:
+    flags = {flag["flag_type"] for flag in claim["flags"]}
+    fallback_action: ClaimReviewAction = (
+        "request_more_information"
+        if "missing_docs" in flags
+        else "escalate_to_senior_broker"
+    )
+    fallback = {
+        "action": fallback_action,
+        "reasoning": "Human review is required for the open claim flags before any decision is recorded.",
+        "source": "rule_fallback",
+    }
+    cfg = settings()
+    if not cfg.groq_api_key:
+        return fallback
+    instruction = (
+        "You are drafting a suggestion for a human broker to review and edit - you are not deciding anything. "
+        "Base your suggestion only on the claim data provided. Return JSON with action and reasoning. action must "
+        "be approve, partially_approve, request_more_information, deny, or escalate_to_senior_broker."
+    )
+    try:
+        response = Groq(api_key=cfg.groq_api_key, timeout=20, max_retries=0).chat.completions.create(
+            model=cfg.groq_model,
+            temperature=0,
+            response_format={"type": "json_object"},
+            max_tokens=400,
+            messages=[
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": json.dumps(claim, default=str)},
+            ],
+        )
+        suggestion = json.loads(response.choices[0].message.content or "{}")
+    except (GroqError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return fallback
+    if (
+        not isinstance(suggestion, dict)
+        or suggestion.get("action") not in CLAIM_REVIEW_ACTIONS
+        or not isinstance(suggestion.get("reasoning"), str)
+        or not suggestion["reasoning"].strip()
+    ):
+        return fallback
+    return {
+        "action": suggestion["action"],
+        "reasoning": suggestion["reasoning"].strip()[:2000],
+        "source": "claim_agent",
+    }
+
+
+def _claim_review_item(
+    db: Session,
+    intake: ClaimIntake,
+    policy: Policy,
+    flags: list[ClaimFlag],
+) -> dict:
+    documents = db.scalars(
+        select(ClaimDocument)
+        .where(ClaimDocument.claim_intake_id == intake.id)
+        .order_by(ClaimDocument.created_at, ClaimDocument.id)
+    ).all()
+    member = db.scalar(select(Profile).where(Profile.owner_id == policy.owner_id))
+    item = {
+        "id": intake.id,
+        "created_at": intake.created_at.isoformat(),
+        "is_emergency": intake.is_emergency or any(flag.flag_type == "emergency" for flag in flags),
+        "intake": {
+            "kind": intake.kind,
+            "raw_message": intake.raw_message,
+            "structured_fields": intake.structured_fields,
+        },
+        "policy": {
+            "id": policy.id,
+            "status": policy.status,
+            "plan": policy.snapshot.get("plan", {}),
+        },
+        "claimant": {
+            "id": policy.owner_id,
+            "name": member.facts.get("legal_name") if member else None,
+        },
+        "documents": [
+            {
+                "id": document.id,
+                "doc_type": document.doc_type,
+                "extracted_fields": document.extracted_fields,
+                "completeness_ok": document.completeness_ok,
+                "created_at": document.created_at.isoformat(),
+            }
+            for document in documents
+        ],
+        "flags": [
+            {
+                "id": flag.id,
+                "flag_type": flag.flag_type,
+                "reason": flag.reason,
+                "status": flag.status,
+                "created_at": flag.created_at.isoformat(),
+            }
+            for flag in flags
+        ],
+        "transcript": _claim_transcript(intake),
+    }
+    item["suggested_action"] = _suggested_claim_action(item)
+    return item
+
+
+@broker_router.get("")
+def broker_claims(
+    user: User = Depends(require_broker),
+    db: Session = Depends(session),
+):
+    rows = db.execute(
+        select(ClaimIntake, Policy)
+        .join(Policy, Policy.id == ClaimIntake.policy_id)
+        .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+        .where(BrokerAssignment.broker_id == user.id)
+        .order_by(ClaimIntake.created_at)
+    ).all()
+    items = []
+    for intake, policy in rows:
+        flags = db.scalars(
+            select(ClaimFlag)
+            .where(ClaimFlag.claim_intake_id == intake.id, ClaimFlag.status == "open")
+            .order_by(ClaimFlag.created_at, ClaimFlag.id)
+        ).all()
+        if flags:
+            items.append(_claim_review_item(db, intake, policy, flags))
+    return sorted(items, key=lambda item: (not item["is_emergency"], item["created_at"]))
+
+
+@broker_router.post("/{claim_intake_id}/review")
+def review_claim(
+    claim_intake_id: str,
+    body: ClaimReviewInput,
+    user: User = Depends(require_broker),
+    db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    row = db.execute(
+        select(ClaimIntake, Policy)
+        .join(Policy, Policy.id == ClaimIntake.policy_id)
+        .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+        .where(ClaimIntake.id == claim_intake_id, BrokerAssignment.broker_id == user.id)
+        .with_for_update()
+    ).first()
+    if row is None:
+        raise HTTPException(404, "Claim intake not found.")
+    intake, policy = row
+
+    def action():
+        flags = db.scalars(
+            select(ClaimFlag)
+            .where(ClaimFlag.claim_intake_id == intake.id, ClaimFlag.status == "open")
+            .with_for_update()
+        ).all()
+        if not flags:
+            raise HTTPException(409, "This claim no longer has an open review flag.")
+
+        decision = None
+        servicing_event_id = None
+        if body.action in {"approve", "partially_approve"}:
+            missing = _missing_intake_data(intake)
+            if missing or not _documents_complete(db, intake):
+                raise HTTPException(422, "A payable action requires complete intake fields and documents.")
+            decision, _ = record_financial_event(db, policy, _servicing_request(intake, policy))
+            if decision["outcome"] == "insufficient_data":
+                raise HTTPException(422, "The servicing engine requires more verified information.")
+            servicing_event_id = decision["id"]
+
+        before = {
+            "claim_intake_id": intake.id,
+            "open_flag_ids": [flag.id for flag in flags],
+        }
+        after = {
+            "claim_intake_id": intake.id,
+            "decided_by": "reviewer",
+            "servicing_event_id": servicing_event_id,
+        }
+        review = ReviewDecision(
+            owner_id=user.id,
+            servicing_event_id=servicing_event_id,
+            action=body.action,
+            note=body.note,
+            before=before,
+            after=after,
+        )
+        db.add(review)
+        db.flush()
+        db.add(
+            Audit(
+                owner_id=user.id,
+                action="claim_reviewed",
+                subject_id=intake.id,
+                details={
+                    "review_decision_id": review.id,
+                    "action": body.action,
+                    "decided_by": "reviewer",
+                    "servicing_event_id": servicing_event_id,
+                },
+            )
+        )
+        if body.action in {"approve", "partially_approve", "deny"}:
+            for flag in flags:
+                flag.status = "reviewed"
+        return {
+            "review": {
+                "id": review.id,
+                "action": body.action,
+                "note": body.note,
+                "decided_by": "reviewer",
+                "servicing_event_id": servicing_event_id,
+            },
+            "decision": decision,
+        }
+
+    return command(
+        db,
+        user,
+        idempotency_key,
+        {"action": "review_claim", "claim_intake_id": claim_intake_id, **body.model_dump(mode="json")},
         action,
     )

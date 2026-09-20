@@ -1,0 +1,89 @@
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, Check, FileText, MessageSquare } from 'lucide-react';
+import { api, post } from '../api';
+import { ErrorView, Loading } from '../Shopping';
+
+type ReviewAction = 'approve' | 'partially_approve' | 'request_more_information' | 'deny' | 'escalate_to_senior_broker';
+type Claim = {
+  id: string;
+  created_at: string;
+  is_emergency: boolean;
+  intake: { kind: string; raw_message: string | null; structured_fields: Record<string, unknown> };
+  policy: { id: string; status: string; plan: Record<string, any> };
+  claimant: { id: string; name: string | null };
+  documents: Array<{ id: string; doc_type: string; extracted_fields: Record<string, unknown>; completeness_ok: boolean }>;
+  flags: Array<{ id: string; flag_type: string; reason: string }>;
+  transcript: Array<{ role: string; content: string }>;
+  suggested_action: { action: ReviewAction; reasoning: string; source: string };
+};
+
+const actionLabels: Record<ReviewAction, string> = {
+  approve: 'Approve',
+  partially_approve: 'Partially approve',
+  request_more_information: 'Request more information',
+  deny: 'Deny',
+  escalate_to_senior_broker: 'Escalate to senior broker',
+};
+
+function show(value: unknown) {
+  return value == null || value === '' ? 'Not provided' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+export function ClaimReview() {
+  const query = useQueryClient();
+  const claims = useQuery<Claim[]>({ queryKey: ['broker-claims'], queryFn: () => api('/api/broker/claims') });
+  const [selectedId, setSelectedId] = useState('');
+  const [actions, setActions] = useState<Record<string, ReviewAction>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  if (claims.isLoading) return <Loading/>;
+  if (claims.error) return <ErrorView error={claims.error}/>;
+  const rows = claims.data || [];
+  const selected = rows.find(claim => claim.id === selectedId) || rows[0];
+
+  async function confirm(claim: Claim) {
+    const action = actions[claim.id] || claim.suggested_action.action;
+    const note = notes[claim.id]?.trim();
+    if (!note) { setError('Add a reviewer note before confirming this action.'); return; }
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await post(`/api/broker/claims/${claim.id}/review`, { action, note });
+      await query.invalidateQueries({ queryKey: ['broker-claims'] });
+      setMessage(`${actionLabels[action]} was appended to the claim review history.`);
+      setSelectedId('');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The claim review could not be saved.');
+    } finally { setBusy(false); }
+  }
+
+  return <>
+    <div className="page-heading compact"><div><span className="eyebrow">BROKER CLAIM REVIEW</span><h1>Review flagged claims.<br/>Keep every decision human.</h1><p>Emergency claims stay first. Claim Agent suggestions are drafts; edit and confirm the action yourself.</p></div><FileText className="heading-icon" size={54}/></div>
+    {message && <div className="notice" role="status">{message}</div>}
+    {error && <ErrorView error={new Error(error)}/>} 
+    {!rows.length ? <div className="empty-state"><Check size={32}/><h3>No flagged claims need review.</h3><p>New assigned claims with open flags will appear here.</p></div> : <div className="claim-review-layout">
+      <aside className="claim-review-queue" aria-label="Claims awaiting review">
+        <div className="claim-review-queue-heading"><strong>{rows.length} awaiting review</strong><small>Emergency claims are pinned first</small></div>
+        {rows.map(claim => <button key={claim.id} className={`claim-review-item ${claim.is_emergency ? 'emergency' : ''} ${selected?.id === claim.id ? 'selected' : ''}`} onClick={() => { setSelectedId(claim.id); setError(''); }}>
+          <span className={`badge ${claim.is_emergency ? 'urgent' : 'neutral'}`}>{claim.is_emergency ? 'Emergency' : claim.intake.kind.replaceAll('_', ' ')}</span>
+          <strong>{claim.claimant.name || 'Assigned member'}</strong>
+          <small>{claim.policy.plan.name || 'Policy'} · {new Date(claim.created_at).toLocaleDateString()}</small>
+          <span>{claim.flags[0]?.reason}</span>
+        </button>)}
+      </aside>
+      {selected && <article className={`surface claim-review-detail ${selected.is_emergency ? 'emergency' : ''}`}>
+        {selected.is_emergency && <div className="claim-emergency-banner"><AlertTriangle size={20}/><strong>Emergency claim — review before all non-emergency work.</strong></div>}
+        <div className="section-heading"><div><span className="eyebrow">COMPLETE CLAIM INTAKE</span><h2>{selected.claimant.name || 'Assigned member'} · {selected.intake.kind.replaceAll('_', ' ')}</h2><p>Policy {selected.policy.id} · {selected.policy.plan.name || selected.policy.status}</p></div></div>
+        <section className="claim-detail-section"><h3>Intake fields</h3><dl className="claim-field-grid">{Object.entries(selected.intake.structured_fields).filter(([key]) => key !== 'follow_up').map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></section>
+        <section className="claim-detail-section"><h3>Open flags</h3>{selected.flags.map(flag => <div className="claim-flag" key={flag.id}><AlertTriangle size={17}/><div><strong>{flag.flag_type.replaceAll('_', ' ')}</strong><p>{flag.reason}</p></div></div>)}</section>
+        <section className="claim-detail-section"><h3>Documents</h3>{selected.documents.map(document => <article className="claim-document" key={document.id}><div><FileText size={17}/><strong>{document.doc_type.replaceAll('_', ' ')}</strong><span className={`badge ${document.completeness_ok ? 'success' : 'urgent'}`}>{document.completeness_ok ? 'Complete' : 'Incomplete'}</span></div><dl>{Object.entries(document.extracted_fields || {}).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></article>)}</section>
+        <section className="claim-detail-section"><h3>Full Claim Agent transcript</h3><div className="claim-transcript">{selected.transcript.length ? selected.transcript.map((message, index) => <div key={`${message.role}-${index}`}><MessageSquare size={16}/><p><strong>{message.role.replaceAll('_', ' ')}</strong>{message.content}</p></div>) : <p className="muted">This structured intake has no chat transcript.</p>}</div></section>
+        <section className="claim-suggestion"><span className="eyebrow">CLAIM AGENT DRAFT · HUMAN REVIEW REQUIRED</span><h3>{actionLabels[selected.suggested_action.action]}</h3><p>{selected.suggested_action.reasoning}</p></section>
+        <div className="broker-review-form"><div className="form-grid"><label className="field">Reviewer action<select value={actions[selected.id] || selected.suggested_action.action} onChange={event => setActions(current => ({ ...current, [selected.id]: event.target.value as ReviewAction }))}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field">Reviewer note<textarea required maxLength={2000} value={notes[selected.id] || ''} onChange={event => setNotes(current => ({ ...current, [selected.id]: event.target.value }))} placeholder="Record the evidence and reason for this action."/></label></div><p className="muted">Payable actions use the verified intake and deterministic servicing rules. No manual payment amount can be entered.</p><button disabled={busy || !notes[selected.id]?.trim()} onClick={() => void confirm(selected)}><Check size={17}/>{busy ? 'Recording action…' : `Confirm ${actionLabels[actions[selected.id] || selected.suggested_action.action]}`}</button></div>
+      </article>}
+    </div>}
+  </>;
+}

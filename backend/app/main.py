@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .auth import User, current_user, require_broker
+from .claim_agent import broker_router as broker_claim_router
 from .claim_agent import router as claim_agent_router
 from .config import settings
 from .contracts import (
@@ -81,6 +82,7 @@ from .voice import validate_audio
 
 app = FastAPI(title="Helm AI", version="0.1.0")
 app.include_router(claim_agent_router)
+app.include_router(broker_claim_router)
 app.include_router(marketplace_broker_router)
 app.include_router(marketplace_matching_router)
 app.include_router(marketplace_selection_router)

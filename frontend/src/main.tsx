@@ -7,6 +7,7 @@ import { Compass, ArrowUpRight, ArrowRight, Mic, ShieldCheck, Layers3, LayoutDas
 import { api, auth, configureAuth, type Config, aed } from './api';
 import { Dashboard, Intake, QuotePage, ApplicationPage, PolicyPage, Loading, ErrorView } from './Shopping';
 import { BrokerWorkspace } from './Broker';
+import { ClaimReview } from './broker/ClaimReview';
 import { ProviderWorkspace } from './provider/ProviderWorkspace';
 import { MarketplaceJourney } from './MarketplaceJourney';
 import './styles.css';
@@ -80,9 +81,10 @@ function Shell({ session }: { session: Session | null }) {
       navigate('/');
     }
   }
-  return <div className="app-shell"><a className="skip-link" href="#workspace">Skip to workspace</a><aside className={`sidebar ${open ? 'open' : ''}`}><Brand/><span className="nav-caption">YOUR WORKSPACE</span><nav>{access.data?.role === 'provider' ? <NavLink end to="/provider" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Provider workspace</NavLink> : <><NavLink end to="/app" onClick={() => setOpen(false)}><LayoutDashboard size={19}/> Overview</NavLink><Link to="/app" onClick={() => setOpen(false)}><ShieldCheck size={19}/> Policies & cover</Link>{access.data?.role === "broker" && <NavLink to="/app/broker" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Broker workspace</NavLink>}</>}<Link to="/#questions"><MessageIcon/> About this demo</Link></nav><div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={22}/><strong>Clarity, not guesswork.</strong><p>{access.data?.role === 'provider' ? 'Review the details before every submission.' : 'Your choices stay yours. Review the details before every submission.'}</p></div><button className="quiet" onClick={logout}><LogOut size={17}/> Sign out</button></div></aside><div className="app-content"><header className="workspace-header"><button className="mobile-menu quiet" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}><Menu size={23}/></button><span>Individual health insurance <span className="header-divider">/</span> UAE</span><div><span className="badge neutral">Demo workspace</span><span className="user-avatar" title={session.user.email}>{session.user.email?.[0]?.toUpperCase() || 'H'}</span></div></header><main id="workspace"><Outlet/></main><footer className="workspace-footer">Helm AI · All insurance products and transactions in this workspace are demonstrations.</footer></div></div>;
+  return <div className="app-shell"><a className="skip-link" href="#workspace">Skip to workspace</a><aside className={`sidebar ${open ? 'open' : ''}`}><Brand/><span className="nav-caption">YOUR WORKSPACE</span><nav>{access.data?.role === 'provider' ? <NavLink end to="/provider" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Provider workspace</NavLink> : <><NavLink end to="/app" onClick={() => setOpen(false)}><LayoutDashboard size={19}/> Overview</NavLink><Link to="/app" onClick={() => setOpen(false)}><ShieldCheck size={19}/> Policies & cover</Link>{access.data?.role === "broker" && <><NavLink end to="/app/broker" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Broker workspace</NavLink><NavLink to="/app/broker/claims" onClick={() => setOpen(false)}><FileTextIcon/> Claim review</NavLink></>}</>}<Link to="/#questions"><MessageIcon/> About this demo</Link></nav><div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={22}/><strong>Clarity, not guesswork.</strong><p>{access.data?.role === 'provider' ? 'Review the details before every submission.' : 'Your choices stay yours. Review the details before every submission.'}</p></div><button className="quiet" onClick={logout}><LogOut size={17}/> Sign out</button></div></aside><div className="app-content"><header className="workspace-header"><button className="mobile-menu quiet" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}><Menu size={23}/></button><span>Individual health insurance <span className="header-divider">/</span> UAE</span><div><span className="badge neutral">Demo workspace</span><span className="user-avatar" title={session.user.email}>{session.user.email?.[0]?.toUpperCase() || 'H'}</span></div></header><main id="workspace"><Outlet/></main><footer className="workspace-footer">Helm AI · All insurance products and transactions in this workspace are demonstrations.</footer></div></div>;
 }
 function MessageIcon() { return <Layers3 size={19}/>; }
+function FileTextIcon() { return <ClipboardCheck size={19}/>; }
 function App() {
   const config = useQuery({ queryKey: ['config'], queryFn: () => api<Config>('/api/config') }); const [session, setSession] = useState<Session | null>(null); const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -121,9 +123,11 @@ function App() {
       <Route path="quotes/:quoteId" element={<QuotePage/>} />
       <Route path="applications/:applicationId" element={<ApplicationPage/>} />
       <Route path="broker" element={<BrokerWorkspace/>} />
+      <Route path="broker/claims" element={<ClaimReview/>} />
       <Route path="marketplace/:caseId" element={<MarketplaceJourney/>} />
       <Route path="policies/:policyId" element={<PolicyPage config={config.data}/>} />
     </Route>
+    <Route path="/broker/claims" element={<Navigate to="/app/broker/claims" replace/>} />
     <Route path="/provider" element={<Shell session={session}/>}>
       <Route index element={<ProviderWorkspace/>}/>
     </Route>
