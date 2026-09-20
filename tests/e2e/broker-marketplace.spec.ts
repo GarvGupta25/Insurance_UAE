@@ -31,6 +31,10 @@ async function stubBrokerApi(page: Page) {
   await page.route('**/api/broker/marketplace/applications', route => route.fulfill({ json: [
     { id: 'app-1', case_id: 'case-1', applicant_id: 'member-1', provider_id: 'provider-1', status: 'broker_final_review' },
   ] }));
+  await page.route('**/api/broker/marketplace/provider-performance', route => route.fulfill({ json: [
+    { provider_id: 'pearl', provider_name: 'Pearl Health Partners', average_turnaround_hours: 2, submitted: 4, selected: 2, win_rate_pct: 50 },
+    { provider_id: 'al-noor', provider_name: 'Al Noor Takaful', average_turnaround_hours: 12, submitted: 4, selected: 1, win_rate_pct: 25 },
+  ] }));
   await page.route('**/api/broker/marketplace/applications/app-1', route => route.fulfill({ json: {
     id: 'app-1',
     case_id: 'case-1',
@@ -61,11 +65,13 @@ test('broker compares marketplace quotations and both checkpoints', async ({ pag
   await page.getByRole('button', { name: /Case case-1/ }).click();
 
   await expect(page.getByRole('heading', { name: 'Provider quotations and checkpoints' })).toBeVisible();
-  await expect(page.getByText('Al Noor Takaful')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Pearl Health Partners' })).toBeVisible();
+  await expect(page.getByText('2h', { exact: true })).toBeVisible();
+  await expect(page.getByText('Al Noor Takaful', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('checkpoint 1', { exact: true })).toBeVisible();
   await expect(page.getByText('checkpoint 2', { exact: true })).toBeVisible();
-  await page.screenshot({ path: 'PIVOT_V2_PHASE3_BROKER_DESKTOP.png', fullPage: true });
+  await page.screenshot({ path: 'PIVOT_V2_PHASE7_BROKER_PERFORMANCE_DESKTOP.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(300);
-  await page.screenshot({ path: 'PIVOT_V2_PHASE3_BROKER_MOBILE.png', fullPage: true });
+  await page.screenshot({ path: 'PIVOT_V2_PHASE7_BROKER_PERFORMANCE_MOBILE.png', fullPage: true });
 });

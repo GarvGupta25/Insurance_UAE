@@ -12,6 +12,7 @@ import json
 import random
 import sys
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -22,7 +23,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import settings
 from app.db import engine
-from app.marketplace_models import MarketplacePlan, Provider
+from app.marketplace_models import (
+    MarketplaceApplication,
+    MarketplacePlan,
+    Provider,
+    ProviderQuotation,
+)
+from app.models import Case
 
 SEED = 20260919
 ROOT = Path(__file__).resolve().parents[2]
@@ -185,6 +192,55 @@ def seed_catalogue(db: Session) -> dict[str, int]:
     return counts
 
 
+def seed_performance_examples(db: Session) -> None:
+    """Seed reproducible quotation timing evidence for the broker performance view."""
+    case = db.get(Case, "perf-demo-case")
+    if case is None:
+        db.add(Case(id="perf-demo-case", owner_id="perf-demo-member", status="open"))
+        db.flush()
+    sent_at = datetime(2026, 9, 19, 8, tzinfo=timezone.utc)
+    turnaround_hours = {
+        "Pearl Health Partners": 2,
+        "Al Noor Takaful": 12,
+        "Gulf Shield Insurance": 18,
+        "Union Assurance UAE": 24,
+    }
+    for position, (provider_name, hours) in enumerate(turnaround_hours.items(), 1):
+        provider = db.scalar(select(Provider).where(Provider.name == provider_name))
+        plan = db.scalar(
+            select(MarketplacePlan)
+            .where(MarketplacePlan.provider_id == provider.id)
+            .order_by(MarketplacePlan.plan_code)
+        )
+        application_id, quotation_id = f"perf-app-{position}", f"perf-quote-{position}"
+        if db.get(MarketplaceApplication, application_id) is None:
+            db.add(
+                MarketplaceApplication(
+                    id=application_id,
+                    owner_id="perf-demo-member",
+                    case_id="perf-demo-case",
+                    provider_id=provider.id,
+                    status="customer_selected" if provider_name == "Pearl Health Partners" else "declined",
+                    consent_snapshot={"seed_demo": True},
+                    created_at=sent_at,
+                )
+            )
+            db.flush()
+        if db.get(ProviderQuotation, quotation_id) is None:
+            db.add(
+                ProviderQuotation(
+                    id=quotation_id,
+                    application_id=application_id,
+                    provider_id=provider.id,
+                    marketplace_plan_id=plan.id,
+                    plan_terms=plan.terms,
+                    premium=plan.terms["annual_premium"],
+                    status="selected" if provider_name == "Pearl Health Partners" else "declined",
+                    submitted_at=sent_at + timedelta(hours=hours),
+                )
+            )
+
+
 def provision_provider_accounts(db: Session) -> list[tuple[str, str]]:
     """Create four local Supabase Auth provider accounts and their provider_users mappings."""
     cfg = settings()
@@ -261,6 +317,7 @@ def main() -> None:
 
     with Session(engine()) as db:
         counts = seed_catalogue(db)
+        seed_performance_examples(db)
         credentials = [provider_login(spec) for spec in PROVIDER_SPECS[1:]]
         if not args.skip_auth:
             credentials = provision_provider_accounts(db)

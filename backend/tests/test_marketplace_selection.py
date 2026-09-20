@@ -124,6 +124,9 @@ def test_real_quotes_flow_from_ranking_to_three_party_policy_visibility(fixture_
     assert client.post(f"/api/provider/quotations/{selected_quote_id}/accept").status_code == 200
     assert client.post(f"/api/provider/policies/{selected_quote_id}/start").status_code == 403
 
+    owner[0] = member
+    assert client.get("/api/marketplace/cases/selection-case/quotations").json()["status"] == "provider_accepted"
+
     owner[0] = User(broker_id, "broker@example.test", "broker")
     worklist = client.get("/api/broker/worklist")
     assert any(row["id"] == selected_application_id for row in worklist.json())
@@ -132,6 +135,9 @@ def test_real_quotes_flow_from_ranking_to_three_party_policy_visibility(fixture_
         json={"action": "approve", "note": "Accepted terms verified."},
     )
     assert checkpoint.status_code == 200
+
+    owner[0] = member
+    assert client.get("/api/marketplace/cases/selection-case/quotations").json()["status"] == "broker_final_review"
 
     owner[0] = User(selected_provider_user, "selected@provider.test", "provider")
     started = client.post(f"/api/provider/policies/{selected_quote_id}/start")
@@ -144,6 +150,7 @@ def test_real_quotes_flow_from_ranking_to_three_party_policy_visibility(fixture_
     assert client.get(f"/api/provider/policies/{policy_id}/payments").status_code == 404
 
     owner[0] = member
+    assert client.get("/api/marketplace/cases/selection-case/quotations").json()["status"] == "bound"
     assert [row["id"] for row in client.get("/api/marketplace/policies").json()] == [policy_id]
     owner[0] = User(str(uuid4()), "other-member@example.test")
     assert client.get("/api/marketplace/policies").json() == []

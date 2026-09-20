@@ -16,7 +16,7 @@ from .marketplace_models import (
     ProviderFlag,
     ProviderQuotation,
 )
-from .models import BrokerAssignment, Recommendation, ReviewDecision
+from .models import Audit, BrokerAssignment, Recommendation, ReviewDecision
 from .services import assigned
 
 router = APIRouter(prefix="/api/broker/marketplace", tags=["broker-marketplace"])
@@ -140,7 +140,80 @@ def marketplace_worklist_items(db: Session, user: User, current: datetime) -> li
                 "priority_reason": f"{age_days} day(s) unresolved; provider flag requires review.",
             }
         )
+    anomalies = db.execute(
+        select(Audit, MarketplaceApplication)
+        .join(MarketplaceApplication, MarketplaceApplication.id == Audit.subject_id)
+        .join(BrokerAssignment, BrokerAssignment.member_id == Audit.owner_id)
+        .where(
+            BrokerAssignment.broker_id == user.id,
+            Audit.action == "marketplace_anomaly_flagged",
+            MarketplaceApplication.status.not_in(("bound", "declined")),
+        )
+    ).all()
+    for anomaly, application in anomalies:
+        age_days = _age_days(current, anomaly.created_at)
+        items.append(
+            {
+                "id": anomaly.id,
+                "item_type": "provider_flag",
+                "applicant_id": anomaly.owner_id,
+                "case_id": application.case_id,
+                "age_days": age_days,
+                "amount_aed": 0,
+                "priority_reason": (
+                    f"{age_days} day(s) unresolved; {anomaly.details['reason'].lower()} "
+                    f"({anomaly.details['rule']})."
+                ),
+            }
+        )
     return items
+
+
+@router.get("/provider-performance")
+def provider_performance(
+    user: User = Depends(require_broker), db: Session = Depends(session)
+):
+    rows = db.execute(
+        select(Provider, ProviderQuotation, MarketplaceApplication)
+        .outerjoin(ProviderQuotation, ProviderQuotation.provider_id == Provider.id)
+        .outerjoin(
+            MarketplaceApplication,
+            MarketplaceApplication.id == ProviderQuotation.application_id,
+        )
+        .order_by(Provider.name)
+    ).all()
+    providers: dict[str, dict] = {}
+    for provider, quotation, application in rows:
+        summary = providers.setdefault(
+            provider.id,
+            {"provider_id": provider.id, "provider_name": provider.name, "turnarounds": [], "submitted": 0, "selected": 0},
+        )
+        if quotation is None or application is None:
+            continue
+        submitted_at, created_at = quotation.submitted_at, application.created_at
+        summary["turnarounds"].append(max(0, (submitted_at - created_at).total_seconds() / 3600))
+        summary["submitted"] += 1
+        summary["selected"] += quotation.status in {"selected", "accepted"}
+    result = []
+    for summary in providers.values():
+        turnarounds = summary.pop("turnarounds")
+        summary["average_turnaround_hours"] = (
+            round(sum(turnarounds) / len(turnarounds), 2) if turnarounds else None
+        )
+        summary["win_rate_pct"] = (
+            round(100 * summary["selected"] / summary["submitted"], 1)
+            if summary["submitted"]
+            else None
+        )
+        result.append(summary)
+    return sorted(
+        result,
+        key=lambda row: (
+            row["average_turnaround_hours"] is None,
+            row["average_turnaround_hours"] or 0,
+            row["provider_name"],
+        ),
+    )
 
 
 @router.get("/applications")

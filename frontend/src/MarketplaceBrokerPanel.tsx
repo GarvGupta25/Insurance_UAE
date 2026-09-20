@@ -30,6 +30,8 @@ type Detail = Application & {
   }>;
 };
 
+type Performance = { provider_id: string; provider_name: string; average_turnaround_hours: number | null; submitted: number; selected: number; win_rate_pct: number | null };
+
 export function MarketplaceBrokerPanel() {
   const query = useQueryClient();
   const [selected, setSelected] = useState('');
@@ -38,12 +40,15 @@ export function MarketplaceBrokerPanel() {
   const applications = useQuery<Application[]>({
     queryKey: ['broker-marketplace-applications'],
     queryFn: () => api('/api/broker/marketplace/applications'),
+    refetchInterval: 5000,
   });
   const detail = useQuery<Detail>({
     queryKey: ['broker-marketplace-application', selected],
     queryFn: () => api(`/api/broker/marketplace/applications/${selected}`),
     enabled: !!selected,
+    refetchInterval: 5000,
   });
+  const performance = useQuery<Performance[]>({ queryKey: ['broker-provider-performance'], queryFn: () => api('/api/broker/marketplace/provider-performance'), refetchInterval: 5000 });
 
   async function approveCheckpointTwo() {
     setBusy(true); setError('');
@@ -61,8 +66,11 @@ export function MarketplaceBrokerPanel() {
       setError(reason instanceof Error ? reason.message : 'Checkpoint 2 could not be approved.');
     } finally { setBusy(false); }
   }
+  const fastestProviderId = performance.data?.find(provider => provider.average_turnaround_hours != null)?.provider_id;
 
   return <section className="broker-appeals">
+    <div className="section-heading"><div><span className="eyebrow">PROVIDER PERFORMANCE</span><h2>Response speed and wins</h2><p>Calculated from application and quotation timestamps already in the marketplace.</p></div></div>
+    <div className="provider-performance">{performance.data?.map(provider => <article className={provider.provider_id === fastestProviderId ? 'fastest' : ''} key={provider.provider_id}><span className="badge neutral">{provider.provider_id === fastestProviderId ? 'Fastest response' : 'Provider'}</span><h3>{provider.provider_name}</h3><strong>{provider.average_turnaround_hours == null ? 'No data' : `${provider.average_turnaround_hours}h`}</strong><small>average turnaround</small><p>{provider.win_rate_pct == null ? 'No submitted quotations' : `${provider.win_rate_pct}% win rate · ${provider.selected}/${provider.submitted} selected`}</p></article>)}</div>
     <div className="section-heading"><div><span className="eyebrow">MARKETPLACE</span><h2>Provider quotations and checkpoints</h2><p>Compare submitted terms and inspect both human approvals from one case record.</p></div><span className="badge neutral">{applications.data?.length || 0} applications</span></div>
     {applications.isLoading ? <Loading/> : applications.error ? <ErrorView error={applications.error}/> : !applications.data?.length ? <div className="empty-state"><ClipboardCheck size={30}/><h3>No marketplace applications.</h3><p>Applications will appear here after customer consent.</p></div> : <div className="broker-list">{applications.data.map(item => <button className="list-row" key={item.id} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}><span className="badge neutral">{item.status.replaceAll('_', ' ')}</span><div><strong>Case {item.case_id}</strong><small>Applicant {item.applicant_id}</small></div></button>)}</div>}
     {detail.isLoading && <Loading/>}

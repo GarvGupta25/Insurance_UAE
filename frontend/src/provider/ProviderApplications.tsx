@@ -3,7 +3,7 @@ import { api } from '../api';
 import type { ProviderApplication } from './types';
 
 export function ProviderApplications({ selected, onSelect }: { selected: string; onSelect: (id: string) => void }) {
-  const applications = useQuery<ProviderApplication[]>({ queryKey: ['provider-applications'], queryFn: () => api('/api/provider/applications') });
+  const applications = useQuery<ProviderApplication[]>({ queryKey: ['provider-applications'], queryFn: () => api('/api/provider/applications'), refetchInterval: 5000 });
   if (applications.isLoading) return <p>Loading received applications…</p>;
   if (applications.error) return <p className="error">{applications.error.message}</p>;
   if (!applications.data?.length) return <div className="empty-state"><h3>No applications awaiting a quote</h3><p>Broker-approved, consented applications assigned to your organisation will appear here.</p></div>;

@@ -46,7 +46,7 @@ export function BrokerWorkspace() {
   const recommendations = useQuery<Recommendation[]>({ queryKey: ['broker-recommendations'], queryFn: () => api('/api/broker/recommendations') });
   const appeals = useQuery<Appeal[]>({ queryKey: ['broker-appeals'], queryFn: () => api('/api/broker/appeals') });
   const reassessments = useQuery<Reassessment[]>({ queryKey: ['broker-reassessments'], queryFn: () => api('/api/broker/reassessments') });
-  const worklist = useQuery<any[]>({ queryKey: ['broker-worklist'], queryFn: () => api('/api/broker/worklist') });
+  const worklist = useQuery<any[]>({ queryKey: ['broker-worklist'], queryFn: () => api('/api/broker/worklist'), refetchInterval: 5000 });
   const [selectedApplicant, setSelectedApplicant] = useState('');
   const caseDetail = useQuery<any>({ queryKey: ['broker-case', selectedApplicant], queryFn: () => api(`/api/broker/cases/${selectedApplicant}`), enabled: !!selectedApplicant });
   const [notes, setNotes] = useState<Record<string, string>>({});

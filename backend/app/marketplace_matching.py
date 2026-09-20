@@ -1,5 +1,6 @@
 """Member-facing catalogue matching and explicit provider consent."""
 
+from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,7 @@ from .contracts import readiness
 from .db import session
 from .marketplace_broker import advance_to_providers, checkpoint_one_approved_for_case
 from .marketplace_models import MarketplaceApplication, MarketplacePlan, Provider
-from .models import Case, Profile
+from .models import Audit, Case, Profile, now
 from .services import own
 
 router = APIRouter(prefix="/api/marketplace", tags=["marketplace-matching"])
@@ -89,6 +90,28 @@ def create_consented_applications(
             db.add(application)
             db.flush()
             advance_to_providers(db, application)
+            recent = db.scalars(
+                select(MarketplaceApplication).where(
+                    MarketplaceApplication.owner_id == owner_id,
+                    MarketplaceApplication.provider_id == provider_id,
+                    MarketplaceApplication.case_id != case_id,
+                    MarketplaceApplication.created_at >= now() - timedelta(minutes=10),
+                )
+            ).all()
+            if any(
+                row.consent_snapshot.get("shared_profile") == shared_profile for row in recent
+            ):
+                db.add(
+                    Audit(
+                        owner_id=owner_id,
+                        action="marketplace_anomaly_flagged",
+                        subject_id=application.id,
+                        details={
+                            "reason": "Near-duplicate consented application",
+                            "rule": "same member, provider and profile within 10 minutes",
+                        },
+                    )
+                )
         applications.append(application)
     return applications
 

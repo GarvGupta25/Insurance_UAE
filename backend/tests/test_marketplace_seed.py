@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.marketplace_models import MarketplacePlan, Provider
+from app.marketplace_models import MarketplacePlan, Provider, ProviderQuotation
 from app.models import Base
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "seed_marketplace_providers.py"
@@ -61,3 +61,25 @@ def test_generated_marketplace_plans_stay_within_the_documented_tier_ranges():
             assert plan["dental_optical"] in {"none", "basic", "full"}
             assert plan["maternity"]["covered"] in {True, False}
             assert plan["chronic_preexisting"]["covered"] in {True, False}
+
+
+def test_performance_seed_makes_pearl_visibly_fastest_and_is_idempotent():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    try:
+        with Session(engine) as db:
+            seed.seed_catalogue(db)
+            seed.seed_performance_examples(db)
+            db.commit()
+            seed.seed_performance_examples(db)
+            db.commit()
+            quotations = db.execute(
+                select(Provider.name, ProviderQuotation.submitted_at)
+                .join(ProviderQuotation, ProviderQuotation.provider_id == Provider.id)
+                .where(ProviderQuotation.id.like("perf-quote-%"))
+            ).all()
+            assert len(quotations) == 4
+            pearl_time = next(timestamp for name, timestamp in quotations if name == "Pearl Health Partners")
+            assert pearl_time == min(timestamp for _, timestamp in quotations)
+    finally:
+        engine.dispose()
