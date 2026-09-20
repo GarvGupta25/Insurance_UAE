@@ -45,6 +45,10 @@ try {
     & wsl.exe -e bash -lc $bootstrapCommand
     if ($LASTEXITCODE -ne 0) { throw 'The Helm demo accounts could not be prepared.' }
 
+    $marketplaceSeedCommand = 'cd "{0}" && UV_PROJECT_ENVIRONMENT="{1}" ~/.local/bin/uv run --no-sync python scripts/seed_marketplace_providers.py' -f $wslBackendRoot, $wslEnvironment
+    & wsl.exe -e bash -lc $marketplaceSeedCommand
+    if ($LASTEXITCODE -ne 0) { throw 'The marketplace providers and demo logins could not be prepared.' }
+
     $apiPort = 8000
     if (-not (Test-LocalPort $apiPort)) {
         $apiCommand = 'cd "{0}" && export UV_PROJECT_ENVIRONMENT="{1}" && ~/.local/bin/uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000' -f $wslBackendRoot, $wslEnvironment
@@ -78,6 +82,7 @@ try {
     Write-Host 'Member with broker: member@example / password'
     Write-Host 'Broker:              broker@example / password'
     Write-Host 'Regular member:      regular@example / password'
+    Write-Host 'Provider logins:     see SEED_PROVIDER_LOGINS.md'
 }
 finally {
     Pop-Location
