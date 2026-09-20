@@ -129,6 +129,7 @@ def test_free_form_uses_one_call_and_asks_about_only_ambiguous_field(monkeypatch
         "provider_tier": None,
         "benefit_class": "general",
         "billed_amount": 750,
+        "follow_up": "Is the provider in network, private, or out of network?",
     }
     assert result["missing_fields"] == ["provider_tier"]
     assert result["follow_up"] == "Is the provider in network, private, or out of network?"

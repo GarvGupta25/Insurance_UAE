@@ -248,6 +248,7 @@ def create_free_form_intake(
     }[kind]
     fields = {key: value for key, value in extracted.items() if key not in {"kind", "amount"}}
     fields[amount_field] = extracted.get("amount")
+    fields["follow_up"] = follow_up
     intake = ClaimIntake(
         policy_id=policy_id,
         kind=kind,
