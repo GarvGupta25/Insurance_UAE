@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Link, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import type { Session } from '@supabase/supabase-js';
 import { Compass, ArrowUpRight, ArrowRight, Mic, ShieldCheck, Layers3, LayoutDashboard, LogOut, Menu, Check, Sparkles, ClipboardCheck } from 'lucide-react';
 import { api, auth, configureAuth, type Config, aed } from './api';
 import { Dashboard, Intake, QuotePage, ApplicationPage, PolicyPage, Loading, ErrorView } from './Shopping';
 import { BrokerWorkspace } from './Broker';
+import { ProviderWorkspace } from './provider/ProviderWorkspace';
 import './styles.css';
 import { MarketingLayout } from './marketing/components/MarketingLayout';
 import { HomePage } from './marketing/pages/HomePage';
@@ -62,9 +63,10 @@ function Login({ session, config }: { session: Session | null; config: Config })
 }
 
 function Shell({ session }: { session: Session | null }) {
-  const [open, setOpen] = useState(false); const navigate = useNavigate();
-  const access = useQuery({ queryKey: ['access', session?.user.id], queryFn: () => api<{ role: 'member' | 'broker' }>('/api/me/access'), enabled: !!session });
+  const [open, setOpen] = useState(false); const navigate = useNavigate(); const location = useLocation();
+  const access = useQuery({ queryKey: ['access', session?.user.id], queryFn: () => api<{ role: 'member' | 'broker' | 'provider' }>('/api/me/access'), enabled: !!session });
   if (!session) return <Navigate to="/login" replace/>;
+  if (access.data?.role === 'provider' && location.pathname.startsWith('/app')) return <Navigate to="/provider" replace/>;
   async function logout() {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     try {
@@ -77,7 +79,7 @@ function Shell({ session }: { session: Session | null }) {
       navigate('/');
     }
   }
-  return <div className="app-shell"><a className="skip-link" href="#workspace">Skip to workspace</a><aside className={`sidebar ${open ? 'open' : ''}`}><Brand/><span className="nav-caption">YOUR WORKSPACE</span><nav><NavLink end to="/app" onClick={() => setOpen(false)}><LayoutDashboard size={19}/> Overview</NavLink><Link to="/app" onClick={() => setOpen(false)}><ShieldCheck size={19}/> Policies & cover</Link>{access.data?.role === "broker" && <NavLink to="/app/broker" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Broker workspace</NavLink>}<Link to="/#questions"><MessageIcon/> About this demo</Link></nav><div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={22}/><strong>Clarity, not guesswork.</strong><p>Your choices stay yours. Review the details before every submission.</p></div><button className="quiet" onClick={logout}><LogOut size={17}/> Sign out</button></div></aside><div className="app-content"><header className="workspace-header"><button className="mobile-menu quiet" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}><Menu size={23}/></button><span>Individual health insurance <span className="header-divider">/</span> UAE</span><div><span className="badge neutral">Demo workspace</span><span className="user-avatar" title={session.user.email}>{session.user.email?.[0]?.toUpperCase() || 'H'}</span></div></header><main id="workspace"><Outlet/></main><footer className="workspace-footer">Helm AI · All insurance products and transactions in this workspace are demonstrations.</footer></div></div>;
+  return <div className="app-shell"><a className="skip-link" href="#workspace">Skip to workspace</a><aside className={`sidebar ${open ? 'open' : ''}`}><Brand/><span className="nav-caption">YOUR WORKSPACE</span><nav>{access.data?.role === 'provider' ? <NavLink end to="/provider" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Provider workspace</NavLink> : <><NavLink end to="/app" onClick={() => setOpen(false)}><LayoutDashboard size={19}/> Overview</NavLink><Link to="/app" onClick={() => setOpen(false)}><ShieldCheck size={19}/> Policies & cover</Link>{access.data?.role === "broker" && <NavLink to="/app/broker" onClick={() => setOpen(false)}><ClipboardCheck size={19}/> Broker workspace</NavLink>}</>}<Link to="/#questions"><MessageIcon/> About this demo</Link></nav><div className="sidebar-bottom"><div className="sidebar-note"><ShieldCheck size={22}/><strong>Clarity, not guesswork.</strong><p>{access.data?.role === 'provider' ? 'Review the details before every submission.' : 'Your choices stay yours. Review the details before every submission.'}</p></div><button className="quiet" onClick={logout}><LogOut size={17}/> Sign out</button></div></aside><div className="app-content"><header className="workspace-header"><button className="mobile-menu quiet" onClick={() => setOpen(!open)} aria-label="Toggle navigation" aria-expanded={open}><Menu size={23}/></button><span>Individual health insurance <span className="header-divider">/</span> UAE</span><div><span className="badge neutral">Demo workspace</span><span className="user-avatar" title={session.user.email}>{session.user.email?.[0]?.toUpperCase() || 'H'}</span></div></header><main id="workspace"><Outlet/></main><footer className="workspace-footer">Helm AI · All insurance products and transactions in this workspace are demonstrations.</footer></div></div>;
 }
 function MessageIcon() { return <Layers3 size={19}/>; }
 function App() {
@@ -119,6 +121,9 @@ function App() {
       <Route path="applications/:applicationId" element={<ApplicationPage/>} />
       <Route path="broker" element={<BrokerWorkspace/>} />
       <Route path="policies/:policyId" element={<PolicyPage config={config.data}/>} />
+    </Route>
+    <Route path="/provider" element={<Shell session={session}/>}>
+      <Route index element={<ProviderWorkspace/>}/>
     </Route>
 
     <Route path="*" element={<Navigate to="/" replace/>} />
