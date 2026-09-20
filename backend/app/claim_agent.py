@@ -6,18 +6,22 @@ uses upload metadata supplied by that client; it is not OCR.
 """
 
 import json
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header
 from groq import Groq, GroqError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import User, current_user
 from .config import settings
 from .db import session
-from .models import ClaimDocument, ClaimIntake, Policy
+from .explanations import servicing_explanation
+from .models import ClaimDocument, ClaimFlag, ClaimIntake, Policy
 from .services import command, own
+from .servicing import record_financial_event
 
 ClaimKind = Literal["pre_auth", "claim", "reimbursement"]
 DocumentType = Literal["bill", "discharge_summary", "prescription", "other"]
@@ -51,6 +55,12 @@ FOLLOW_UPS = {
     "provider_tier": "Is the provider in network, private, or out of network?",
     "benefit_class": "Which benefit is this for: general, maternity, chronic, dental, or optical care?",
     "amount": "What is the billed or estimated amount in AED?",
+}
+REVIEW_LIMIT_FRACTION = Decimal("0.10")
+AMOUNT_FIELDS = {
+    "claim": "billed_amount",
+    "pre_auth": "estimated_amount",
+    "reimbursement": "amount_paid_by_member",
 }
 
 
@@ -92,11 +102,7 @@ class StructuredClaimIntake(BaseModel):
 
     @model_validator(mode="after")
     def amount_matches_kind(self):
-        expected = {
-            "claim": "billed_amount",
-            "pre_auth": "estimated_amount",
-            "reimbursement": "amount_paid_by_member",
-        }[self.kind]
+        expected = AMOUNT_FIELDS[self.kind]
         if getattr(self, expected) is None:
             raise ValueError(f"{expected.replace('_', ' ')} is required for this intake.")
         return self
@@ -241,11 +247,7 @@ def create_free_form_intake(
             "follow_up": follow_up,
         }
 
-    amount_field = {
-        "claim": "billed_amount",
-        "pre_auth": "estimated_amount",
-        "reimbursement": "amount_paid_by_member",
-    }[kind]
+    amount_field = AMOUNT_FIELDS[kind]
     fields = {key: value for key, value in extracted.items() if key not in {"kind", "amount"}}
     fields[amount_field] = extracted.get("amount")
     fields["follow_up"] = follow_up
@@ -269,6 +271,111 @@ def create_free_form_intake(
     }
 
 
+def _flag(db: Session, intake_id: str, flag_type: str, reason: str) -> None:
+    if not db.scalar(
+        select(ClaimFlag.id).where(
+            ClaimFlag.claim_intake_id == intake_id,
+            ClaimFlag.flag_type == flag_type,
+            ClaimFlag.status == "open",
+        )
+    ):
+        db.add(ClaimFlag(claim_intake_id=intake_id, flag_type=flag_type, reason=reason))
+
+
+def _missing_intake_data(intake: ClaimIntake) -> list[str]:
+    fields = intake.structured_fields
+    amount_field = AMOUNT_FIELDS[intake.kind]
+    return [
+        field
+        for field in ("event_id", "policy_month", "benefit_class", "provider_tier", amount_field)
+        if not _has_value(fields.get(field))
+    ]
+
+
+def _documents_complete(db: Session, intake: ClaimIntake) -> bool:
+    documents = db.scalars(
+        select(ClaimDocument).where(ClaimDocument.claim_intake_id == intake.id)
+    ).all()
+    complete_types = {document.doc_type for document in documents if document.completeness_ok}
+    return all(document.completeness_ok for document in documents) and set(
+        REQUIRED_DOCUMENTS[intake.kind]
+    ).issubset(complete_types)
+
+
+def _servicing_request(intake: ClaimIntake, policy: Policy) -> dict:
+    fields = intake.structured_fields
+    kind = "preauth" if intake.kind == "pre_auth" else intake.kind
+    amount_field = AMOUNT_FIELDS[intake.kind]
+    return {
+        "id": fields["event_id"],
+        "kind": kind,
+        "policy_month": fields["policy_month"],
+        "benefit_class": fields["benefit_class"],
+        "provider_tier": fields["provider_tier"],
+        "setting": fields.get("setting", "outpatient"),
+        "geography": fields.get("geography", "UAE"),
+        "description": fields.get("description", ""),
+        amount_field: fields[amount_field],
+        "policy_active": policy.status == "demo_active",
+    }
+
+
+def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_result: dict) -> dict:
+    """Route only; all financial facts below are returned by servicing.py."""
+    intake = db.get(ClaimIntake, intake_id)
+    if intake is None:
+        return intake_result
+    if not _documents_complete(db, intake):
+        _flag(db, intake.id, "missing_docs", "Required claim documents are incomplete or missing.")
+        return {**intake_result, "route": "review"}
+    missing = _missing_intake_data(intake)
+    if missing:
+        _flag(db, intake.id, "missing_docs", f"Missing intake fields: {', '.join(missing)}.")
+        return {**intake_result, "route": "review"}
+    if db.scalar(
+        select(ClaimFlag.id).where(ClaimFlag.claim_intake_id == intake.id, ClaimFlag.status == "open")
+    ):
+        return {**intake_result, "route": "review"}
+
+    annual_limit = policy.snapshot.get("plan", {}).get("annual_limit")
+    if not isinstance(annual_limit, (int, float)) or isinstance(annual_limit, bool) or annual_limit <= 0:
+        _flag(db, intake.id, "exclusion_risk", "Verified plan terms do not include an annual limit.")
+        return {**intake_result, "route": "review"}
+    request = _servicing_request(intake, policy)
+    amount = Decimal(str(request[AMOUNT_FIELDS[intake.kind]]))
+    threshold = Decimal(str(annual_limit)) * REVIEW_LIMIT_FRACTION
+    if amount >= threshold:
+        _flag(
+            db,
+            intake.id,
+            "high_value",
+            f"AED {amount} meets or exceeds the AED {threshold} review threshold (10% of the annual limit).",
+        )
+        return {**intake_result, "route": "review"}
+
+    decision, _ = record_financial_event(db, policy, request)
+    intake.structured_fields = {**intake.structured_fields, "servicing_event_id": decision["id"]}
+    if decision["outcome"] == "insufficient_data":
+        _flag(
+            db,
+            intake.id,
+            "exclusion_risk",
+            "The deterministic servicing engine returned insufficient_data and requires human review.",
+        )
+        return {
+            **intake_result,
+            "route": "review",
+            "decision": decision,
+            "member_explanation": servicing_explanation(decision, "member"),
+        }
+    return {
+        **intake_result,
+        "route": "straight_through",
+        "decision": decision,
+        "member_explanation": servicing_explanation(decision, "member"),
+    }
+
+
 @router.post("/structured")
 def structured_intake(
     policy_id: str,
@@ -277,13 +384,18 @@ def structured_intake(
     db: Session = Depends(session),
     idempotency_key: str = Header(),
 ):
-    own(db, Policy, policy_id, user)
+    policy = own(db, Policy, policy_id, user, lock=True)
+
+    def action():
+        result = create_structured_intake(db, policy_id, body)
+        return route_claim_intake(db, policy, result["intake_id"], result)
+
     return command(
         db,
         user,
         idempotency_key,
         {"action": "structured_claim_intake", "policy_id": policy_id, **body.model_dump(mode="json")},
-        lambda: create_structured_intake(db, policy_id, body),
+        action,
     )
 
 
@@ -295,11 +407,16 @@ def free_form_intake(
     db: Session = Depends(session),
     idempotency_key: str = Header(),
 ):
-    own(db, Policy, policy_id, user)
+    policy = own(db, Policy, policy_id, user, lock=True)
+
+    def action():
+        result = create_free_form_intake(db, policy_id, body)
+        return result if result["intake_id"] is None else route_claim_intake(db, policy, result["intake_id"], result)
+
     return command(
         db,
         user,
         idempotency_key,
         {"action": "free_form_claim_intake", "policy_id": policy_id, **body.model_dump(mode="json")},
-        lambda: create_free_form_intake(db, policy_id, body),
+        action,
     )
