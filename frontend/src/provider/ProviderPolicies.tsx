@@ -5,7 +5,7 @@ import type { ProviderPolicy, ProviderQuotation } from './types';
 
 export function ProviderPolicies({ selectedPolicy, onSelectPolicy }: { selectedPolicy: string; onSelectPolicy: (id: string) => void }) {
   const query = useQueryClient(); const [message, setMessage] = useState('');
-  const quotations = useQuery<ProviderQuotation[]>({ queryKey: ['provider-quotations'], queryFn: () => api('/api/provider/quotations') });
+  const quotations = useQuery<ProviderQuotation[]>({ queryKey: ['provider-quotations'], queryFn: () => api('/api/provider/quotations'), refetchInterval: 5000 });
   const policies = useQuery<ProviderPolicy[]>({ queryKey: ['provider-policies'], queryFn: () => api('/api/provider/policies') });
   async function action(path: string, body: unknown = {}) {
     setMessage('');

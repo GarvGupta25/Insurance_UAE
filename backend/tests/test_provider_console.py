@@ -15,6 +15,20 @@ from app.marketplace_models import (
 from app.models import Case, ReviewDecision
 
 
+def quotation_body(premium=9000):
+    return {
+        "premium": premium,
+        "plan_terms": {
+            "network": "wide",
+            "annual_limit": 500000,
+            "deductible": 300,
+            "outpatient_copay_pct": 15,
+            "maternity": {"covered": True, "waiting_period_months": 6, "limit": 50000},
+            "chronic_preexisting": {"covered": True, "waiting_period_months": 0},
+        },
+    }
+
+
 def seed_provider_world(fixture_client):
     _, owner, engine = fixture_client
     member = owner[0]
@@ -90,7 +104,7 @@ def test_every_provider_endpoint_is_tenant_scoped(fixture_client):
     attempts = [
         client.post(
             "/api/provider/applications/provider-application-b/quote",
-            json={"premium": 9000, "plan_terms": {"deductible": 300}},
+            json=quotation_body(),
         ),
         client.post("/api/provider/quotations/provider-quotation-b/accept"),
         client.post("/api/provider/policies/provider-quotation-b/start"),
@@ -118,7 +132,7 @@ def test_provider_lifecycle_requires_selection_and_checkpoint_two(fixture_client
 
     submitted = client.post(
         "/api/provider/applications/provider-application-a/quote",
-        json={"premium": 8800, "plan_terms": {"deductible": 250, "network": "wide"}},
+        json=quotation_body(8800),
     )
     assert submitted.status_code == 201
     quotation_id = submitted.json()["id"]

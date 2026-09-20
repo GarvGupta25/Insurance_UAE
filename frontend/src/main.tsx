@@ -8,6 +8,7 @@ import { api, auth, configureAuth, type Config, aed } from './api';
 import { Dashboard, Intake, QuotePage, ApplicationPage, PolicyPage, Loading, ErrorView } from './Shopping';
 import { BrokerWorkspace } from './Broker';
 import { ProviderWorkspace } from './provider/ProviderWorkspace';
+import { MarketplaceJourney } from './MarketplaceJourney';
 import './styles.css';
 import { MarketingLayout } from './marketing/components/MarketingLayout';
 import { HomePage } from './marketing/pages/HomePage';
@@ -120,6 +121,7 @@ function App() {
       <Route path="quotes/:quoteId" element={<QuotePage/>} />
       <Route path="applications/:applicationId" element={<ApplicationPage/>} />
       <Route path="broker" element={<BrokerWorkspace/>} />
+      <Route path="marketplace/:caseId" element={<MarketplaceJourney/>} />
       <Route path="policies/:policyId" element={<PolicyPage config={config.data}/>} />
     </Route>
     <Route path="/provider" element={<Shell session={session}/>}>

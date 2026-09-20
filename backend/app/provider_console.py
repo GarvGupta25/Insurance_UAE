@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,10 +23,34 @@ from .marketplace_models import (
 router = APIRouter(prefix="/api/provider", tags=["provider"])
 
 
+class BenefitTerms(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    covered: bool
+    waiting_period_months: Annotated[int, Field(ge=0, le=120)] | None = None
+    limit: Annotated[Decimal, Field(gt=0)] | None = None
+
+    @model_validator(mode="after")
+    def require_wait_when_covered(self):
+        if self.covered and self.waiting_period_months is None:
+            raise ValueError("A covered benefit requires a waiting period.")
+        return self
+
+
+class PlanTerms(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Annotated[str | None, Field(max_length=160)] = None
+    network: Literal["restricted", "standard", "wide"]
+    annual_limit: Annotated[Decimal, Field(gt=0)]
+    deductible: Annotated[Decimal, Field(ge=0)]
+    outpatient_copay_pct: Annotated[int, Field(ge=0, le=100)]
+    maternity: BenefitTerms
+    chronic_preexisting: BenefitTerms
+
+
 class QuoteSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
     premium: Annotated[Decimal, Field(gt=0, max_digits=12, decimal_places=2)]
-    plan_terms: dict
+    plan_terms: PlanTerms
     marketplace_plan_id: str | None = None
 
 
@@ -143,7 +167,7 @@ def submit_quote(
         application_id=application.id,
         provider_id=provider.provider_id,
         marketplace_plan_id=body.marketplace_plan_id,
-        plan_terms=body.plan_terms,
+        plan_terms=body.plan_terms.model_dump(mode="json", exclude_none=True),
         premium=body.premium,
     )
     db.add(quotation)
@@ -207,6 +231,8 @@ def start_policy(
         provider_id=provider.provider_id,
     )
     db.add(policy)
+    # The database policy trigger checks the pre-bind application state before allowing the insert.
+    db.flush()
     application.status = "bound"
     db.commit()
     db.refresh(policy)

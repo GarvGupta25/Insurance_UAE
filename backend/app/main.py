@@ -47,6 +47,8 @@ from .domain import (
 from .marketplace_broker import marketplace_worklist_items
 from .marketplace_broker import router as marketplace_broker_router
 from .marketplace_matching import router as marketplace_matching_router
+from .marketplace_models import MarketplacePolicy, Provider, ProviderQuotation
+from .marketplace_selection import router as marketplace_selection_router
 from .models import (
     Application,
     Audit,
@@ -79,6 +81,7 @@ from .voice import validate_audio
 app = FastAPI(title="Helm AI", version="0.1.0")
 app.include_router(marketplace_broker_router)
 app.include_router(marketplace_matching_router)
+app.include_router(marketplace_selection_router)
 app.include_router(provider_console_router)
 app.add_middleware(
     CORSMiddleware,
@@ -721,7 +724,14 @@ def broker_case_detail(applicant_id: str, user: User = Depends(require_broker), 
     events = db.scalars(select(ServicingEvent).where(ServicingEvent.owner_id == applicant_id).order_by(ServicingEvent.sequence)).all()
     reviews = db.scalars(select(ReviewDecision).join(Recommendation, ReviewDecision.recommendation_id == Recommendation.id).where(Recommendation.owner_id == applicant_id).order_by(ReviewDecision.created_at)).all()
     ledger = db.scalar(select(LedgerProjection).where(LedgerProjection.policy_id == policy.id)) if policy else None
-    return {"applicant_id": applicant_id, "profile": facts, "classification": classify(facts), "quote": latest_quote.snapshot if latest_quote else None, "recommendation": {"status": recommendation.status, "summary": recommendation.summary, "proposed_plan_id": recommendation.proposed_plan_id} if recommendation else None, "review_history": [{"action": review.action, "note": review.note, "decided_at": review.created_at.isoformat()} for review in reviews], "policy": policy.snapshot if policy else None, "ledger": ledger.ledger if ledger else None, "servicing_history": [present_event(event) for event in events], "next_action_needed": "Broker review required" if recommendation and recommendation.status == "pending_review" else "No recommendation action pending"}
+    marketplace_policies = db.execute(
+        select(MarketplacePolicy, ProviderQuotation, Provider)
+        .join(ProviderQuotation, ProviderQuotation.id == MarketplacePolicy.quotation_id)
+        .join(Provider, Provider.id == MarketplacePolicy.provider_id)
+        .where(MarketplacePolicy.owner_id == applicant_id)
+        .order_by(MarketplacePolicy.started_at.desc())
+    ).all()
+    return {"applicant_id": applicant_id, "profile": facts, "classification": classify(facts), "quote": latest_quote.snapshot if latest_quote else None, "recommendation": {"status": recommendation.status, "summary": recommendation.summary, "proposed_plan_id": recommendation.proposed_plan_id} if recommendation else None, "review_history": [{"action": review.action, "note": review.note, "decided_at": review.created_at.isoformat()} for review in reviews], "policy": policy.snapshot if policy else None, "marketplace_policies": [{"id": marketplace_policy.id, "status": marketplace_policy.status, "provider": provider.name, "premium": float(quotation.premium), "terms": quotation.plan_terms, "started_at": marketplace_policy.started_at.isoformat()} for marketplace_policy, quotation, provider in marketplace_policies], "ledger": ledger.ledger if ledger else None, "servicing_history": [present_event(event) for event in events], "next_action_needed": "Broker review required" if recommendation and recommendation.status == "pending_review" else "No recommendation action pending"}
 
 
 @app.post("/api/broker/recommendations/{recommendation_id}/review")
