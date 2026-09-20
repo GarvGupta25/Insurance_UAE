@@ -1,7 +1,17 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -210,6 +220,55 @@ class LedgerProjection(Owned, Base):
     policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id"), unique=True)
     through_sequence: Mapped[int] = mapped_column(Integer, default=0)
     ledger: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ClaimIntake(Base):
+    """Pre-adjudication claim data; never an authoritative financial decision."""
+
+    __tablename__ = "claim_intakes"
+    __table_args__ = (
+        CheckConstraint("kind IN ('pre_auth', 'claim', 'reimbursement', 'appeal', 'emergency')"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    policy_id: Mapped[str] = mapped_column(ForeignKey("policies.id"))
+    kind: Mapped[str] = mapped_column(String(24))
+    raw_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structured_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_emergency: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimDocument(Base):
+    __tablename__ = "claim_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    claim_intake_id: Mapped[str] = mapped_column(
+        ForeignKey("claim_intakes.id", ondelete="CASCADE")
+    )
+    doc_type: Mapped[str] = mapped_column(String(40))
+    extracted_fields: Mapped[dict | None] = mapped_column(JSON, default=dict, nullable=True)
+    completeness_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimFlag(Base):
+    __tablename__ = "claim_flags"
+    __table_args__ = (
+        CheckConstraint(
+            "flag_type IN ('emergency', 'missing_docs', 'exclusion_risk', 'anomaly', 'high_value')"
+        ),
+        CheckConstraint("status IN ('open', 'reviewed', 'closed')"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    claim_intake_id: Mapped[str] = mapped_column(
+        ForeignKey("claim_intakes.id", ondelete="CASCADE")
+    )
+    flag_type: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class PolicyReassessment(Owned, Base):
