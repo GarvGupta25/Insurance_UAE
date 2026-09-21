@@ -132,13 +132,19 @@ export function ChatPanel({ onClose }: { onClose: () => void }) {
           send(input);
         }}
       >
-        <input
-          type="text"
+        <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              send(input);
+            }
+          }}
           placeholder="Ask a question..."
           aria-label="Type your message"
           disabled={isSending}
+          rows={1}
         />
         <button type="submit" disabled={isSending || !input.trim()}>
           Send

@@ -25,16 +25,10 @@ def test_marketplace_catalogue_seed_is_idempotent_and_preserves_helm_reference_t
             second = seed.seed_catalogue(db)
             db.commit()
 
-            assert first == {
-                "Helm Direct": 3,
-                "Al Noor Takaful": 6,
-                "Gulf Shield Insurance": 6,
-                "Union Assurance UAE": 7,
-                "Pearl Health Partners": 8,
-            }
+            assert first == {spec["name"]: 5 for spec in seed.PROVIDER_SPECS}
             assert second == first
-            assert db.scalar(select(func.count()).select_from(Provider)) == 5
-            assert db.scalar(select(func.count()).select_from(MarketplacePlan)) == 30
+            assert db.scalar(select(func.count()).select_from(Provider)) == 10
+            assert db.scalar(select(func.count()).select_from(MarketplacePlan)) == 50
 
             helm = db.scalar(select(Provider).where(Provider.name == "Helm Direct"))
             assert helm is not None
@@ -43,7 +37,9 @@ def test_marketplace_catalogue_seed_is_idempotent_and_preserves_helm_reference_t
                 .where(MarketplacePlan.provider_id == helm.id)
                 .order_by(MarketplacePlan.plan_code)
             ).all()
-            assert terms == sorted(seed.fixture_plans(), key=lambda plan: plan["id"])
+            fixture_by_id = {plan["id"]: plan for plan in seed.fixture_plans()}
+            assert {plan["id"]: plan for plan in terms if plan["id"] in fixture_by_id} == fixture_by_id
+            assert len(terms) == 5
     finally:
         engine.dispose()
 

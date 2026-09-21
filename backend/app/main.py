@@ -49,7 +49,7 @@ from .domain import (
 from .marketplace_broker import marketplace_worklist_items
 from .marketplace_broker import router as marketplace_broker_router
 from .marketplace_matching import router as marketplace_matching_router
-from .marketplace_models import MarketplacePolicy, Provider, ProviderQuotation
+from .marketplace_models import MarketplacePlan, MarketplacePolicy, Provider, ProviderQuotation
 from .marketplace_selection import router as marketplace_selection_router
 from .models import (
     Application,
@@ -267,6 +267,46 @@ def public_providers():
             for r in rows
         ],
         "notice": "Fictional facilities and approximate demonstration locations. Not a real care directory.",
+    }
+
+
+@app.get("/api/public/marketplace-plans")
+def public_marketplace_plans(db: Session = Depends(session)):
+    """Return the local fictional marketplace catalogue without exposing any account data."""
+    rows = db.execute(
+        select(MarketplacePlan, Provider)
+        .join(Provider, Provider.id == MarketplacePlan.provider_id)
+        .order_by(Provider.name, MarketplacePlan.plan_code)
+    ).all()
+    return {
+        "plans": [
+            {**plan.terms, "id": plan.plan_code, "provider_name": provider.name}
+            for plan, provider in rows
+        ],
+        "notice": "All marketplace plans and partner names are fictional Helm demonstration data.",
+    }
+
+
+@app.get("/api/public/marketplace-partners")
+def public_marketplace_partners(db: Session = Depends(session)):
+    rows = db.execute(
+        select(Provider.name, func.count(MarketplacePlan.id))
+        .join(MarketplacePlan, MarketplacePlan.provider_id == Provider.id)
+        .group_by(Provider.id, Provider.name)
+        .order_by(Provider.name)
+    ).all()
+    return {
+        "items": [
+            {
+                "id": name.lower().replace(" ", "-").replace("/", "-"),
+                "name": name,
+                "tier": "marketplace_partner",
+                "emirate": "UAE demonstration",
+                "scheme_count": count,
+            }
+            for name, count in rows
+        ],
+        "notice": "Fictional Helm marketplace partners. Not real insurer relationships.",
     }
 
 

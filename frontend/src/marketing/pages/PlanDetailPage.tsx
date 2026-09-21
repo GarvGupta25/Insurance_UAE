@@ -22,11 +22,11 @@ export function PlanDetailPage() {
   const { planId } = useParams();
   
   const { data: catalogue, error, isLoading } = useQuery({
-    queryKey: ['catalogue'],
-    queryFn: () => api('/api/catalogue'),
+    queryKey: ['marketplace-plans'],
+    queryFn: () => api('/api/public/marketplace-plans'),
   });
 
-  const plan = catalogue?.items?.find((p: any) => p.id === planId);
+  const plan = catalogue?.plans?.find((p: any) => p.id === planId);
 
   if (isLoading) {
     return (
@@ -57,11 +57,11 @@ export function PlanDetailPage() {
       <Section id="plan-detail-hero" tinted>
         <div className="plan-detail-hero">
           <Link to="/plans" className="plan-detail-back">
-            <ArrowLeft size={16} /> Back to all schemes
+            <ArrowLeft size={16} /> Back to popular schemes
           </Link>
           <h1>{plan.name}</h1>
           <p className="plan-detail-persona">{getPlanPersona(plan.id)}</p>
-          <div className="plan-detail-premium">{aed(plan.base_premium)} <span>/ year</span></div>
+          <div className="plan-detail-premium">{aed(plan.annual_premium * 100)} <span>/ year</span></div>
           <Link to="/login" className="m-button-primary">
             Get my personal comparison <ArrowRight size={18} />
           </Link>
@@ -72,27 +72,27 @@ export function PlanDetailPage() {
         <div className="plan-terms-grid">
           <SurfaceCard className="plan-term-card">
             <h3>Network Tier</h3>
-            <p className="plan-term-value">{plan.network_tier.replace(/_/g, ' ')}</p>
+            <p className="plan-term-value">{plan.network.replace(/_/g, ' ')}</p>
             <p className="plan-term-explainer">Determines which clinics and hospitals you can visit without paying entirely out of pocket.</p>
           </SurfaceCard>
           
           <SurfaceCard className="plan-term-card">
             <h3>Annual Limit</h3>
-            <p className="plan-term-value">{aed(plan.annual_limit)}</p>
+            <p className="plan-term-value">{aed(plan.annual_limit * 100)}</p>
             <p className="plan-term-explainer">The maximum amount the insurer will pay for your treatment in a single policy year.</p>
           </SurfaceCard>
           
           <SurfaceCard className="plan-term-card">
             <h3>Deductible & Co-pay</h3>
-            <p className="plan-term-value">{aed(plan.deductible)} + {plan.copay_percent}%</p>
+            <p className="plan-term-value">{aed(plan.deductible * 100)} + {plan.outpatient_copay_pct}%</p>
             <p className="plan-term-explainer">You pay the deductible first, then the co-pay percentage for remaining costs on each visit.</p>
           </SurfaceCard>
 
           <SurfaceCard className="plan-term-card">
             <h3>Maternity Cover</h3>
             <div className="plan-term-value">
-              {plan.maternity_waiting_months > 0 
-                ? `Starts after ${plan.maternity_waiting_months} months` 
+              {!plan.maternity.covered ? 'Not included' : plan.maternity.waiting_period_months > 0
+                ? `Starts after ${plan.maternity.waiting_period_months} months`
                 : 'Covered immediately'}
             </div>
             <p className="plan-term-explainer">The waiting period before you can claim for pregnancy and maternity-related care.</p>
@@ -101,8 +101,8 @@ export function PlanDetailPage() {
           <SurfaceCard className="plan-term-card">
             <h3>Pre-existing Conditions</h3>
             <div className="plan-term-value">
-              {plan.chronic_waiting_months > 0 
-                ? `Starts after ${plan.chronic_waiting_months} months` 
+              {!plan.chronic_preexisting.covered ? 'Not included' : plan.chronic_preexisting.waiting_period_months > 0
+                ? `Starts after ${plan.chronic_preexisting.waiting_period_months} months`
                 : 'Covered immediately'}
             </div>
             <p className="plan-term-explainer">The waiting period before treatment for conditions you already had prior to joining is covered.</p>
@@ -111,7 +111,7 @@ export function PlanDetailPage() {
           <SurfaceCard className="plan-term-card">
             <h3>Dental & Optical</h3>
             <div className="plan-term-value flex-align">
-              {plan.dental_optical ? <><CheckCircle2 size={18} className="icon-success" /> Included</> : 'Not included'}
+              {plan.dental_optical !== 'none' ? <><CheckCircle2 size={18} className="icon-success" /> {plan.dental_optical}</> : 'Not included'}
             </div>
             <p className="plan-term-explainer">Coverage for routine dental checkups, procedures, and eye care.</p>
           </SurfaceCard>

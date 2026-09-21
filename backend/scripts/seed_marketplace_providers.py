@@ -39,38 +39,81 @@ PROVIDER_SPECS = (
     {
         "name": "Helm Direct",
         "slug": "helm-direct",
-        "count": 3,
-        "weights": None,
+        "count": 5,
+        "weights": {"restricted": 0.2, "standard": 0.6, "wide": 0.2},
         "display_name": None,
     },
     {
         "name": "Al Noor Takaful",
         "slug": "al-noor-takaful",
-        "count": 6,
+        "count": 5,
         "weights": {"restricted": 0.7, "standard": 0.3, "wide": 0.0},
         "display_name": "Al Noor Marketplace Team",
     },
     {
         "name": "Gulf Shield Insurance",
         "slug": "gulf-shield-insurance",
-        "count": 6,
+        "count": 5,
         "weights": {"restricted": 0.0, "standard": 0.25, "wide": 0.75},
         "display_name": "Gulf Shield Marketplace Team",
     },
     {
         "name": "Union Assurance UAE",
         "slug": "union-assurance-uae",
-        "count": 7,
+        "count": 5,
         "weights": {"restricted": 0.1, "standard": 0.8, "wide": 0.1},
         "display_name": "Union Assurance Marketplace Team",
     },
     {
         "name": "Pearl Health Partners",
         "slug": "pearl-health-partners",
-        "count": 8,
+        "count": 5,
         "weights": {"restricted": 0.2, "standard": 0.55, "wide": 0.25},
         "display_name": "Pearl Health Marketplace Team",
     },
+    {
+        "name": "Oasis Care Insurance",
+        "slug": "oasis-care-insurance",
+        "count": 5,
+        "weights": {"restricted": 0.45, "standard": 0.45, "wide": 0.1},
+        "display_name": "Oasis Care Marketplace Team",
+    },
+    {
+        "name": "Emirates Wellbeing Takaful",
+        "slug": "emirates-wellbeing-takaful",
+        "count": 5,
+        "weights": {"restricted": 0.2, "standard": 0.6, "wide": 0.2},
+        "display_name": "Emirates Wellbeing Marketplace Team",
+    },
+    {
+        "name": "Falcon Medical Cover",
+        "slug": "falcon-medical-cover",
+        "count": 5,
+        "weights": {"restricted": 0.1, "standard": 0.55, "wide": 0.35},
+        "display_name": "Falcon Medical Marketplace Team",
+    },
+    {
+        "name": "Horizon Health UAE",
+        "slug": "horizon-health-uae",
+        "count": 5,
+        "weights": {"restricted": 0.1, "standard": 0.4, "wide": 0.5},
+        "display_name": "Horizon Health Marketplace Team",
+    },
+    {
+        "name": "Cedar Bay Assurance",
+        "slug": "cedar-bay-assurance",
+        "count": 5,
+        "weights": {"restricted": 0.3, "standard": 0.5, "wide": 0.2},
+        "display_name": "Cedar Bay Marketplace Team",
+    },
+)
+
+PLAN_PROFILES = (
+    ("Essential Care", "restricted", "Value-focused everyday care"),
+    ("Everyday Plus", "standard", "Routine GP and specialist access"),
+    ("Family Care", "standard", "Family and maternity-focused benefits"),
+    ("Chronic Care", "wide", "Ongoing-condition and specialist-focused benefits"),
+    ("Worldwide Care", "wide", "Higher-limit cover with wider access"),
 )
 
 TIER_RANGES = {
@@ -111,7 +154,7 @@ def _tier(rng: random.Random, weights: dict[str, float]) -> str:
 
 
 def _generated_plan(rng: random.Random, spec: dict, position: int) -> dict:
-    network = _tier(rng, spec["weights"])
+    label, network, member_focus = PLAN_PROFILES[position - 1]
     ranges = TIER_RANGES[network]
     annual_limit = rng.randint(*ranges["annual_limit"])
     maternity_covered = rng.random() < 2 / 3
@@ -119,11 +162,13 @@ def _generated_plan(rng: random.Random, spec: dict, position: int) -> dict:
     plan_code = f"{spec['slug'].replace('-', '_')}_{position}"
     return {
         "id": plan_code,
-        "name": f"{spec['name']} {network.title()} {position}",
+        "name": f"{spec['name']} {label}",
         "annual_premium": rng.randint(*ranges["premium"]),
         "deductible": rng.randint(*ranges["deductible"]),
         "network": network,
         "network_note": f"Fictional {network} demonstration network for {spec['name']}.",
+        "member_focus": member_focus,
+        "coverage_area": "UAE demonstration network",
         "outpatient_copay_pct": rng.randint(*ranges["copay"]),
         "maternity": (
             {
@@ -147,9 +192,14 @@ def _generated_plan(rng: random.Random, spec: dict, position: int) -> dict:
 def planned_catalogue() -> dict[str, list[dict]]:
     """Build every plan before checking the database so partial reruns remain deterministic."""
     rng = random.Random(SEED)
-    plans = {"Helm Direct": [deepcopy(plan) for plan in fixture_plans()]}
-    for spec in PROVIDER_SPECS[1:]:
-        plans[spec["name"]] = [_generated_plan(rng, spec, position) for position in range(1, spec["count"] + 1)]
+    plans: dict[str, list[dict]] = {}
+    for spec in PROVIDER_SPECS:
+        provider_plans = [deepcopy(plan) for plan in fixture_plans()] if spec["name"] == "Helm Direct" else []
+        provider_plans.extend(
+            _generated_plan(rng, spec, position)
+            for position in range(len(provider_plans) + 1, spec["count"] + 1)
+        )
+        plans[spec["name"]] = provider_plans
     return plans
 
 
@@ -169,13 +219,15 @@ def seed_catalogue(db: Session) -> dict[str, int]:
     counts: dict[str, int] = {}
     for spec in PROVIDER_SPECS:
         provider = get_or_create_provider(db, spec["name"])
-        existing_codes = set(
-            db.scalars(
-                select(MarketplacePlan.plan_code).where(MarketplacePlan.provider_id == provider.id)
+        existing = {
+            plan.plan_code: plan
+            for plan in db.scalars(
+                select(MarketplacePlan).where(MarketplacePlan.provider_id == provider.id)
             ).all()
-        )
+        }
         for plan in catalogue[spec["name"]]:
-            if plan["id"] not in existing_codes:
+            saved_plan = existing.get(plan["id"])
+            if saved_plan is None:
                 db.add(
                     MarketplacePlan(
                         provider_id=provider.id,
@@ -185,7 +237,18 @@ def seed_catalogue(db: Session) -> dict[str, int]:
                         is_helm_direct_reference=spec["name"] == "Helm Direct",
                     )
                 )
+            else:
+                saved_plan.name = plan["name"]
+                saved_plan.terms = plan
+                saved_plan.is_helm_direct_reference = spec["name"] == "Helm Direct"
             db.flush()
+        target_codes = {plan["id"] for plan in catalogue[spec["name"]]}
+        for stale_plan in existing.values():
+            if stale_plan.plan_code not in target_codes and not db.scalar(
+                select(ProviderQuotation.id).where(ProviderQuotation.marketplace_plan_id == stale_plan.id)
+            ):
+                db.delete(stale_plan)
+        db.flush()
         counts[spec["name"]] = db.scalar(
             select(func.count()).select_from(MarketplacePlan).where(MarketplacePlan.provider_id == provider.id)
         )
@@ -249,7 +312,7 @@ def provision_provider_accounts(db: Session) -> list[tuple[str, str]]:
 
     credentials = []
     with httpx.Client(timeout=15) as client:
-        for spec in PROVIDER_SPECS[1:]:
+        for spec in (item for item in PROVIDER_SPECS if item["display_name"]):
             email, password = provider_login(spec)
             account_id = db.execute(
                 text("SELECT id::text FROM auth.users WHERE email = :email"), {"email": email}
@@ -318,7 +381,7 @@ def main() -> None:
     with Session(engine()) as db:
         counts = seed_catalogue(db)
         seed_performance_examples(db)
-        credentials = [provider_login(spec) for spec in PROVIDER_SPECS[1:]]
+        credentials = [provider_login(spec) for spec in PROVIDER_SPECS if spec["display_name"]]
         if not args.skip_auth:
             credentials = provision_provider_accounts(db)
         db.commit()

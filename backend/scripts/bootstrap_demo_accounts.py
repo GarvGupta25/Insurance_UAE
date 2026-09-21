@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import settings
 from app.db import engine
+from app.domain import plans
+from app.models import Policy
 
 PASSWORD = "password"
 ACCOUNTS = {
@@ -81,8 +83,26 @@ def main() -> None:
             ),
             {"member": ids["member@example"], "broker": ids["broker@example"]},
         )
+        has_policy = db.execute(
+            text("SELECT 1 FROM public.policies WHERE owner_id = :owner_id LIMIT 1"),
+            {"owner_id": ids["member@example"]},
+        ).scalar_one_or_none()
+        if not has_policy:
+            active_plan = next(plan for plan in plans() if plan["id"] == "plan_b")
+            db.execute(
+                Policy.__table__.insert().values(
+                    owner_id=ids["member@example"],
+                    status="demo_active",
+                    version=1,
+                    snapshot={
+                        "plan": active_plan,
+                        "start_date": "2026-01-01",
+                        "source": "local_demo_bootstrap",
+                    },
+                )
+            )
 
-    print("Local Helm demonstration accounts are ready.")
+    print("Local Helm demonstration accounts and the active member policy are ready.")
 
 
 if __name__ == "__main__":

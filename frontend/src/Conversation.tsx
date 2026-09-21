@@ -9,6 +9,7 @@ export function Conversation({ caseId, profile, voice, policyId }: { caseId: str
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [dismissed, setDismissed] = useState<string[]>([]);
   const end = useRef<HTMLDivElement>(null);
   const { data, error: loadError } = useQuery({ queryKey: ['case', caseId], queryFn: () => api(`/api/cases/${caseId}`), refetchInterval: query => query.state.data?.active_runs?.length ? 1500 : false });
+  const visibleMessages = data?.messages.filter((message: any) => message.text !== 'AI is not configured yet. Your saved policy details remain available on this page.');
   useEffect(() => { end.current?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }, [data?.messages?.length]);
   async function send(event: React.FormEvent) {
     event.preventDefault(); if (!text.trim()) return; setBusy(true); setError('');
@@ -23,17 +24,17 @@ export function Conversation({ caseId, profile, voice, policyId }: { caseId: str
   return <section className="conversation">
     <div className="conversation-header"><span className="assistant-avatar"><Sparkles size={21}/></span><div><strong>Your Helm assistant</strong><small>Here to make the details clearer</small></div><span className="status-dot"/></div>
     <div className="messages" aria-label="Conversation history"><div className="message assistant"><span className="eyebrow">LET’S START WITH YOU</span><p>{policyId ? 'Ask a question about this policy, its saved terms or its payment schedule.' : 'Tell me what you need from your health cover. We’ll keep the details together, so you only explain things once.'}</p><p>{!policyId && profile.readiness.question}</p></div>
-      {data?.messages.map((message: any) => <div className={`message ${message.role}`} key={message.id}><span className="message-label">{message.role === 'user' ? 'You' : 'Helm'}{message.modality === 'voice' ? ' · from voice' : ''}</span><p>{message.text}</p>{message.role === 'assistant' && <ReadAloud text={message.text}/>}
+      {visibleMessages?.map((message: any) => <div className={`message ${message.role}`} key={message.id}><span className="message-label">{message.role === 'user' ? 'You' : 'Helm'}{message.modality === 'voice' ? ' · from voice' : ''}</span><p>{message.text}</p>{message.role === 'assistant' && <ReadAloud text={message.text}/>}
         {message.details?.patch && Object.keys(message.details.patch).length > 0 && !dismissed.includes(message.id) && <div className="fact-review"><strong>Check what I understood</strong><dl>{Object.entries(message.details.patch).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{Array.isArray(value) ? value.join(', ') : String(value)}</dd></div>)}</dl><div className="actions"><button disabled={busy || message.details.profile_version !== profile.version} onClick={() => accept(message)}><Check size={15}/> Save these details</button><button className="quiet" onClick={() => setDismissed(d => [...d, message.id])}>Discard</button></div>{message.details.profile_version !== profile.version && <small>Your profile has changed. Use the editor to apply any remaining corrections.</small>}</div>}</div>)}
       {data?.active_runs?.length > 0 && <div className="processing" role="status"><span className="typing-dots">•••</span> Working on your answer. Your saved details are safe.</div>}
       {loadError && <p className="error">{(loadError as Error).message}</p>}<div ref={end}/>
     </div>
     <form className="composer" onSubmit={send}>
       {modality === 'voice' && <div className="transcript-label"><MessageCircle size={15}/> Review or edit the transcript, then send.</div>}
-      <label className="sr-only" htmlFor="message">Your answer or policy question</label><textarea id="message" value={text} maxLength={4000} onChange={e => setText(e.target.value)} placeholder="Tell us a little about yourself, or ask a question…" rows={3}/>
+      <label className="sr-only" htmlFor="message">Your answer or policy question</label><textarea id="message" value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Tell us a little about yourself, or ask a question…" rows={3}/>
       {transcript !== null && <div className="fact-review"><label className="field">Review the voice transcript<textarea aria-label="Voice transcript" value={transcript} onChange={e => setTranscript(e.target.value)}/></label><div className="actions"><button type="button" onClick={() => { setText(previous => previous ? previous + '\n' + transcript : transcript); setModality('voice'); setTranscript(null); }}>Use this transcript</button><button type="button" className="quiet" onClick={() => setTranscript(null)}>Discard recording</button></div></div>}
       <div className="composer-actions"><VoiceInput key={caseId + (policyId || '')} available={voice && !busy} onTranscript={setTranscript}/><button className="send-button" aria-label="Send message" disabled={busy || !text.trim() || !!data?.active_runs?.length}><ArrowUp size={20}/></button></div>
-      <small>Voice sends audio to Groq for transcription. Helm discards the clip; submitted text is saved.</small>
+      <small>Press Enter to send · Shift+Enter for a new line. Voice sends audio to Groq for transcription; Helm discards the clip.</small>
       {error && <p role="alert" className="error">{error}</p>}
     </form>
   </section>;

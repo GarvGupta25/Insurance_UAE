@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { PageShell, Section, SurfaceCard } from '../components';
+import { Link } from 'react-router-dom';
+import { ArrowRight, Building2 } from 'lucide-react';
+import { PageShell, Section } from '../components';
 import { api } from '../../api';
 import './PartnersPage.css';
 
@@ -8,9 +10,11 @@ interface Provider {
   name: string;
   tier: string;
   emirate: string;
+  scheme_count?: number;
 }
 
 const TIER_LABELS: Record<string, string> = {
+  marketplace_partner: 'Helm marketplace partners',
   in_network_clinic: 'Community / Restricted',
   private_hospital: 'Standard',
   premium_private_hospital: 'Premium / Wide',
@@ -18,8 +22,8 @@ const TIER_LABELS: Record<string, string> = {
 
 export function PartnersPage() {
   const { data: providersData, error } = useQuery({
-    queryKey: ['public-providers'],
-    queryFn: () => api('/api/public/providers'),
+    queryKey: ['marketplace-partners'],
+    queryFn: () => api('/api/public/marketplace-partners'),
   });
 
   // Group providers by tier
@@ -39,11 +43,12 @@ export function PartnersPage() {
       </div>
 
       <Section id="partners-hero">
-        <div className="partners-hero">
+        <div className="partners-hero scroll-reveal">
+          <span className="partners-kicker"><Building2 size={16}/> Helm marketplace</span>
           <h1>Our Partners</h1>
           <p>
             Helm AI is designed to integrate seamlessly with top-tier providers across the UAE.
-            Explore our fictional network tiers below.
+            Explore ten fictional marketplace partners below. Each provides five synthetic schemes.
           </p>
         </div>
       </Section>
@@ -66,10 +71,12 @@ export function PartnersPage() {
                   <h2 className="partners-tier-heading">{label}</h2>
                   <div className="partners-grid">
                     {tierProviders.map((provider: Provider) => (
-                      <SurfaceCard key={provider.id} className="partners-card">
+                      <Link key={provider.id} to="/plans" className="partners-card scroll-reveal">
+                        <span className="partners-card-icon"><Building2 size={22}/></span>
                         <h3>{provider.name}</h3>
-                        <p>{provider.emirate}</p>
-                      </SurfaceCard>
+                        <p>{provider.scheme_count || 0} fictional schemes · {provider.emirate}</p>
+                        <span className="partners-card-action">Explore schemes <ArrowRight size={16}/></span>
+                      </Link>
                     ))}
                   </div>
                 </div>

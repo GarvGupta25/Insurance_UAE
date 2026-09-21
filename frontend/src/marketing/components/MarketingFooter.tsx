@@ -4,7 +4,7 @@ import { Compass } from 'lucide-react';
 const SITE_LINKS = [
   { heading: 'Explore', links: [
     { to: '/', label: 'Home' },
-    { to: '/plans', label: 'Best Schemes' },
+    { to: '/plans', label: 'Popular Schemes' },
     { to: '/how-it-works', label: 'How It Works' },
     { to: '/guide', label: 'New to the UAE?' },
   ]},
