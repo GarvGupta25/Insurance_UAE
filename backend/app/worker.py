@@ -58,6 +58,9 @@ def work_once(compiled):
         state = {
             "text": message.text,
             "facts": facts,
+            # This fresh snapshot wins over an older graph checkpoint when the
+            # member has saved edits in the profile form between chat messages.
+            "profile_facts": facts,
             "message_id": message.id,
             "context": {
                 **message.details.get("context", {}),

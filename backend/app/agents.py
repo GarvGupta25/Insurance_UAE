@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, TypedDict
 
 from groq import Groq
@@ -46,6 +48,7 @@ class IntakeFieldState(TypedDict):
 class AgentState(TypedDict, total=False):
     text: str
     facts: dict
+    profile_facts: dict
     context: dict
     message_id: str
     result: dict
@@ -88,14 +91,14 @@ def _initial_fields(state: AgentState) -> dict[str, IntakeFieldState]:
         fields.setdefault(name, {"value": None, "answered": False})
 
     # A directly edited/accepted profile is authoritative and may move a resumed graph forward.
-    for name, value in state.get("facts", {}).items():
+    for name, value in state.get("profile_facts", state.get("facts", {})).items():
         if name in fields and _has_value(name, value):
             fields[name] = {"value": value, "answered": True}
     return fields
 
 
 def _collected_facts(state: AgentState, fields: dict[str, IntakeFieldState]) -> dict:
-    facts = dict(state.get("facts", {}))
+    facts = dict(state.get("profile_facts", state.get("facts", {})))
     facts.update(
         {
             name: item["value"]
@@ -145,25 +148,28 @@ def phrase_intake_question(field: str, facts: dict, *, clarification: bool = Fal
         f"{instruction} Ask only this one question and do not combine it with another question. "
         "Use the member's name only when supplied. Return only the question text."
     )
-    response = _client().chat.completions.create(
-        model=settings().groq_model,
-        temperature=0,
-        max_tokens=180,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps({"question": question, "context": context})},
-        ],
-    )
+    try:
+        response = _client().chat.completions.create(
+            model=settings().groq_model,
+            temperature=0,
+            max_tokens=180,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps({"question": question, "context": context})},
+            ],
+        )
+    except Exception:
+        return question
     reply = (response.choices[0].message.content or "").strip()
-    if not reply or len(reply) > 600:
-        raise ValueError("The assistant returned an invalid intake question.")
-    return reply
+    # A model may finish its internal reasoning without emitting visible text.
+    # This prompt is non-essential, so keep the member moving with the fixed question.
+    return reply if reply and len(reply) <= 600 else question
 
 
 def extract_intake_value(field: str, text: str, facts: dict) -> Any:
     """Use the model only to extract the active field from the current reply."""
     if not settings().groq_api_key:
-        return NEEDS_CLARIFICATION
+        return _local_intake_value(field, text)
     field_schema = Facts.model_json_schema()["properties"][field]
     empty_list_rule = (
         " If the member explicitly says they have no near-term needs, return [\"none\"] rather than []."
@@ -177,25 +183,70 @@ def extract_intake_value(field: str, text: str, facts: dict) -> Any:
         "one key named value. Do not infer a diagnosis, date, identity fact, or preference."
         + empty_list_rule
     )
-    response = _client().chat.completions.create(
-        model=settings().groq_model,
-        temperature=0,
-        max_tokens=300,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": text},
-        ],
-    )
+    try:
+        response = _client().chat.completions.create(
+            model=settings().groq_model,
+            temperature=0,
+            max_tokens=300,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": text},
+            ],
+        )
+    except Exception:
+        return _local_intake_value(field, text)
     raw = (response.choices[0].message.content or "").strip()
     if raw == NEEDS_CLARIFICATION:
-        return NEEDS_CLARIFICATION
+        return _local_intake_value(field, text)
     try:
         body = json.loads(raw)
     except json.JSONDecodeError:
-        return NEEDS_CLARIFICATION
+        return _local_intake_value(field, text)
     if not isinstance(body, dict) or set(body) != {"value"}:
-        return NEEDS_CLARIFICATION
+        return _local_intake_value(field, text)
     return body["value"]
+
+
+def _local_intake_value(field: str, text: str) -> Any:
+    """Handle common short answers when a model response is unavailable or malformed."""
+    value = " ".join(text.casefold().strip().split())
+    yes_no = {"yes": True, "y": True, "no": False, "n": False, "not really": False}
+    aliases = {
+        "payer": {"i": "self", "me": "self", "myself": "self", "you": "self", "self": "self", "employer": "employer", "company": "employer", "sponsor": "sponsor"},
+        "geography": {"uae": "UAE", "within uae": "UAE", "domestic": "UAE", "international": "international", "worldwide": "international", "abroad": "international"},
+        "residency": {"citizen": "citizen", "resident": "resident", "visitor": "visitor", "pending": "pending"},
+        "emirates_id_status": {"issued": "issued", "pending": "application_pending", "application pending": "application_pending", "na": "not_applicable_visitor", "n/a": "not_applicable_visitor", "not applicable": "not_applicable_visitor"},
+        "payment_frequency": {"monthly": "monthly", "month": "monthly", "annual": "annual", "yearly": "annual"},
+    }
+    if field in {"maternity", "strict_budget", "immediate_chronic_cover"}:
+        return yes_no.get(value, NEEDS_CLARIFICATION)
+    if field == "smoker":
+        return yes_no.get(value, value if value in {"unknown", "declined"} else NEEDS_CLARIFICATION)
+    if field == "diagnosed_conditions":
+        return "yes" if value in {"yes", "y"} else "no" if value in {"no", "n", "not really"} else value if value in {"unknown", "declined"} else NEEDS_CLARIFICATION
+    if field in aliases:
+        return aliases[field].get(value, NEEDS_CLARIFICATION)
+    if field == "emirate":
+        names = {"dubai": "Dubai", "abu dhabi": "Abu Dhabi", "sharjah": "Sharjah", "ajman": "Ajman", "fujairah": "Fujairah", "ras al khaimah": "Ras Al Khaimah", "umm al quwain": "Umm Al Quwain"}
+        return names.get(value, NEEDS_CLARIFICATION)
+    if field in {"annual_budget", "contribution_aed", "maximum_maternity_wait"}:
+        digits = re.sub(r"[^0-9]", "", value)
+        return int(digits) if digits else NEEDS_CLARIFICATION
+    if field == "near_term_needs":
+        return ["none"] if value in {"none", "no", "nothing", "no needs"} else [part.strip() for part in text.split(",") if part.strip()] or NEEDS_CLARIFICATION
+    if field in {"legal_name", "nationality", "company_name", "sponsor_name"}:
+        return text.strip() if text.strip() else NEEDS_CLARIFICATION
+    if field in {"date_of_birth", "start_date"}:
+        if value == "today":
+            return date.today().isoformat()
+        if value == "tomorrow":
+            return (date.today() + timedelta(days=1)).isoformat()
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d %B %Y", "%d %b %Y"):
+            try:
+                return datetime.strptime(value, fmt).date().isoformat()
+            except ValueError:
+                pass
+    return NEEDS_CLARIFICATION
 
 
 def _validated_field(field: str, value: Any, facts: dict) -> Any:
@@ -342,7 +393,7 @@ def intake_complete(state: AgentState) -> dict:
     patch = state.get("turn_patch", {})
     stage = state.get("stage", "collecting")
     if stage == "confirmed_for_review":
-        reply = "Your completed profile is already marked ready for broker review."
+        reply = "Your five personalised plan recommendations are ready. Open Get quotation to compare them, or select up to three providers manually."
         return {
             "result": _result(reply, {}, mode="intake_state_machine", stage=stage, ready=True),
             "_next": "end",
@@ -350,7 +401,7 @@ def intake_complete(state: AgentState) -> dict:
     if stage == "paused":
         answer = _strict_yes_no(state.get("text", ""))
         if answer is True:
-            reply = "Your intake is complete and confirmed for broker review."
+            reply = "Your details are confirmed. Your five personalised plan recommendations are ready under Get quotation."
             return {
                 "stage": "confirmed_for_review",
                 "awaiting_answer": False,
@@ -363,7 +414,7 @@ def intake_complete(state: AgentState) -> dict:
                 ),
                 "_next": "end",
             }
-        reply = "Your completed profile is saved. Would you like me to prepare this for broker review?"
+        reply = "Your completed profile is saved. Are these details correct? Reply yes to see your five personalised recommendations."
         return {
             "stage": "complete_pending_confirmation",
             "awaiting_answer": True,
@@ -377,7 +428,7 @@ def intake_complete(state: AgentState) -> dict:
         }
     if not state.get("awaiting_answer"):
         summary = summarize_intake(facts)
-        reply = summary + " Would you like me to prepare this for broker review?"
+        reply = summary + " Are these details correct? Reply yes to see your five personalised recommendations."
         mode = "intake_state_machine" if settings().groq_api_key else "manual"
         return {
             "current_node": "intake_complete",
@@ -395,10 +446,10 @@ def intake_complete(state: AgentState) -> dict:
 
     answer = _strict_yes_no(state.get("text", ""))
     if answer is True:
-        reply = "Your intake is complete and confirmed for broker review."
+        reply = "Your details are confirmed. Your five personalised plan recommendations are ready under Get quotation."
         next_stage = "confirmed_for_review"
     else:
-        reply = "Your progress is saved. You can return whenever you are ready for broker review."
+        reply = "Your progress is saved. You can edit any detail and ask again when you are ready for recommendations."
         next_stage = "paused"
     return {
         "current_node": "intake_complete",
@@ -594,43 +645,17 @@ def rank_catalogue_plans(profile: dict, catalogue: list[dict]) -> list[dict]:
 
 
 def explain_catalogue_ranking(ranked: list[dict]) -> list[dict]:
-    """Explain one fixed ranking with one model call; never return model-edited figures."""
-    if not settings().groq_api_key:
-        return [
-            {
-                "plan_id": row["plan_id"],
-                "explanation": (
-                    f"This plan scored {row['score']} from its price, coverage and network fit."
-                ),
-            }
-            for row in ranked
-        ]
-    response = _client().chat.completions.create(
-        model=settings().groq_model,
-        temperature=0,
-        response_format={"type": "json_object"},
-        max_tokens=1200,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Do not change the ranking, the premiums, or any figure - your only job is to "
-                    "explain, in plain language, why each of these 5 plans is here, using only the "
-                    "factors provided. Return JSON as {\"explanations\":[{\"plan_id\":...,"
-                    "\"explanation\":...}]}, once for each supplied plan and in the same order."
-                ),
-            },
-            {"role": "user", "content": json.dumps(ranked)},
-        ],
-    )
-    body = json.loads(response.choices[0].message.content or "{}")
-    explanations = body.get("explanations")
-    expected = [row["plan_id"] for row in ranked]
-    if not isinstance(explanations, list) or [item.get("plan_id") for item in explanations] != expected:
-        raise ValueError("The assistant returned explanations for a different ranking.")
-    if any(not isinstance(item.get("explanation"), str) or not item["explanation"].strip() for item in explanations):
-        raise ValueError("The assistant returned an invalid ranking explanation.")
-    return [{"plan_id": item["plan_id"], "explanation": item["explanation"].strip()} for item in explanations]
+    """Explain the deterministic ranking without letting a model delay the member journey."""
+    return [
+        {
+            "plan_id": row["plan_id"],
+            "explanation": (
+                f"Matched from your saved budget, cover needs and network preference "
+                f"(fit score {row['score']}/100)."
+            ),
+        }
+        for row in ranked
+    ]
 
 
 def _route(state: AgentState) -> str:

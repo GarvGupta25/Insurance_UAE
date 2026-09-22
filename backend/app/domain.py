@@ -3,6 +3,7 @@ import hashlib
 import json
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from functools import lru_cache
 from pathlib import Path
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -18,6 +19,7 @@ def plans():
     return json.loads((DATA / "hackathon_data.json").read_text(encoding="utf-8-sig"))["plans"]
 
 
+@lru_cache(maxsize=1)
 def source_data():
     return json.loads((DATA / "hackathon_data.json").read_text(encoding="utf-8-sig"))
 

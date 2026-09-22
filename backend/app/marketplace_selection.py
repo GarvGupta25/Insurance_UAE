@@ -52,6 +52,10 @@ def _quotation_rows(db: Session, applications: list[MarketplaceApplication]):
 def _collection_ready(applications: list[MarketplaceApplication], quotation_count: int) -> bool:
     if not applications or quotation_count == 0:
         return False
+    # A member may accept a provider's submitted quotation immediately rather
+    # than waiting for every selected provider to reply.
+    if quotation_count > 0:
+        return True
     current = now()
     created_at = applications[0].created_at
     if created_at.tzinfo is None:
@@ -116,6 +120,17 @@ def _status_payload(db: Session, case_id: str, user: User, *, persist: bool = Tr
                 )
     profile = db.scalar(select(Profile).where(Profile.owner_id == user.id))
     ranked = rank_real_quotations(profile.facts, rows) if ready and profile else []
+    updates = [
+        {
+            "quotation_id": quotation.id,
+            "provider_name": provider.name,
+            "premium_aed": float(quotation.premium),
+            "terms": quotation.plan_terms,
+            "status": quotation.status,
+        }
+        for quotation, _, provider in rows
+        if quotation.status not in {"declined", "withdrawn"}
+    ]
     if persist:
         db.commit()
     active = next(
@@ -128,12 +143,21 @@ def _status_payload(db: Session, case_id: str, user: User, *, persist: bool = Tr
     )
     return {
         "case_id": case_id,
-        "status": active.status if active else "quotes_collected" if ready else "sent_to_providers",
+        "status": (
+            active.status
+            if active
+            else "quotes_collected"
+            if ready
+            else "quotation_received"
+            if rows
+            else "sent_to_providers"
+        ),
         "collection_ready": ready,
         "responded": len(rows),
         "invited": len(applications),
         "collection_window_hours": int(COLLECTION_WINDOW.total_seconds() / 3600),
         "quotations": ranked,
+        "updates": updates,
     }
 
 
@@ -150,6 +174,44 @@ def member_marketplace_applications(
     for case_id, status in rows:
         grouped.setdefault(case_id, status)
     return [{"case_id": case_id, "status": status} for case_id, status in grouped.items()]
+
+
+@router.get("/notifications")
+def member_marketplace_notifications(
+    user: User = Depends(current_user), db: Session = Depends(session)
+):
+    rows = db.execute(
+        select(MarketplaceApplication, Provider)
+        .join(Provider, Provider.id == MarketplaceApplication.provider_id)
+        .where(MarketplaceApplication.owner_id == user.id)
+        .order_by(MarketplaceApplication.created_at.desc())
+    ).all()
+    messages = {
+        "sent_to_providers": "Your selected provider has received your quotation request.",
+        "quotes_collected": "A provider quotation is ready to compare.",
+        "customer_selected": "Your selected quotation is waiting for provider acceptance.",
+        "bound": "Your provider has started your demonstration policy.",
+    }
+    result = []
+    for application, provider in rows:
+        quotation = db.scalar(
+            select(ProviderQuotation).where(ProviderQuotation.application_id == application.id)
+        )
+        quote_ready = quotation is not None and quotation.status not in {"declined", "withdrawn"}
+        result.append(
+            {
+                "case_id": application.case_id,
+                "provider": provider.name,
+                "status": application.status,
+                "message": (
+                    f"{provider.name} submitted a quotation. Open it to review the terms."
+                    if quote_ready and application.status == "sent_to_providers"
+                    else messages.get(application.status, "Your marketplace request has an update.")
+                ),
+                "new_quotation": quote_ready,
+            }
+        )
+    return result
 
 
 @router.get("/cases/{case_id}/quotations")
@@ -175,17 +237,15 @@ def select_quotation(
     if selected is None:
         raise HTTPException(404, "Quotation not found.")
     selected_application = db.get(MarketplaceApplication, selected.application_id)
-    status = _status_payload(db, selected_application.case_id, user, persist=False)
-    if not status["collection_ready"]:
-        raise HTTPException(409, "Provider quotations are still being collected.")
-    if quotation_id not in {row["quotation_id"] for row in status["quotations"]}:
-        raise HTTPException(409, "Only a currently ranked quotation can be selected.")
     applications = _case_applications(db, selected_application.case_id, user)
     rows = _quotation_rows(db, applications)
     for quotation, application, _ in rows:
         chosen = quotation.id == quotation_id
         quotation.status = "selected" if chosen else "declined"
         application.status = "customer_selected" if chosen else "declined"
+    for application in applications:
+        if application.id != selected_application.id and not any(row[1].id == application.id for row in rows):
+            application.status = "declined"
     db.commit()
     return {
         "quotation_id": selected.id,

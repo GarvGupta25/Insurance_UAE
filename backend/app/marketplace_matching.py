@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,7 +12,6 @@ from .agents import explain_catalogue_ranking, rank_catalogue_plans
 from .auth import User, current_user
 from .contracts import readiness
 from .db import session
-from .marketplace_broker import advance_to_providers, checkpoint_one_approved_for_case
 from .marketplace_models import MarketplaceApplication, MarketplacePlan, Provider
 from .models import Audit, Case, Profile, now
 from .services import own
@@ -26,6 +25,7 @@ class ConsentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     consent: Literal["yes", "no"]
+    plan_ids: list[str] = Field(default_factory=list, max_length=3)
 
 
 def catalogue(db: Session) -> list[dict]:
@@ -56,11 +56,9 @@ def create_consented_applications(
     ranked: list[dict],
     consent: str,
 ) -> list[MarketplaceApplication]:
-    """Create and send one application per ranked provider, only on literal consent."""
+    """Create and send member-selected provider requests after explicit consent."""
     if consent != "yes":
         return []
-    if not checkpoint_one_approved_for_case(db, case_id):
-        raise HTTPException(403, "Checkpoint 1 approval is required before provider submission.")
 
     by_provider: dict[str, list[str]] = {}
     for row in ranked:
@@ -79,7 +77,7 @@ def create_consented_applications(
                 owner_id=owner_id,
                 case_id=case_id,
                 provider_id=provider_id,
-                status="broker_approved",
+                status="sent_to_providers",
                 consent_snapshot={
                     "explicit_consent": "yes",
                     "question": CONSENT_QUESTION,
@@ -89,7 +87,6 @@ def create_consented_applications(
             )
             db.add(application)
             db.flush()
-            advance_to_providers(db, application)
             recent = db.scalars(
                 select(MarketplaceApplication).where(
                     MarketplaceApplication.owner_id == owner_id,
@@ -121,8 +118,6 @@ def _matching_context(db: Session, case_id: str, user: User) -> tuple[Profile, l
     profile = db.scalar(select(Profile).where(Profile.owner_id == user.id))
     if profile is None or not readiness(profile.facts)["ready"]:
         raise HTTPException(409, "Complete the insurance profile before catalogue matching.")
-    if not checkpoint_one_approved_for_case(db, case_id):
-        raise HTTPException(403, "Checkpoint 1 approval is required before catalogue matching.")
     return profile, rank_catalogue_plans(profile.facts, catalogue(db))
 
 
@@ -151,6 +146,12 @@ def consent_to_providers(
         own(db, Case, case_id, user)
         return {"consent": "no", "applications": []}
     profile, ranked = _matching_context(db, case_id, user)
+    if not body.plan_ids:
+        raise HTTPException(422, "Choose one to three recommended plans before requesting quotations.")
+    requested = set(body.plan_ids)
+    ranked = [item for item in ranked if item["plan_id"] in requested]
+    if len(ranked) != len(requested):
+        raise HTTPException(422, "Choose plans from the five recommendations shown for this profile.")
     applications = create_consented_applications(
         db,
         owner_id=user.id,

@@ -1,5 +1,6 @@
 """Provider-owned marketplace workspace with mandatory tenant isolation."""
 
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -11,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from .auth import ProviderIdentity, require_provider
 from .db import session
-from .marketplace_broker import require_binding_approval
 from .marketplace_models import (
     MarketplaceApplication,
     MarketplacePolicy,
@@ -19,6 +19,7 @@ from .marketplace_models import (
     ProviderPayment,
     ProviderQuotation,
 )
+from .models import Policy
 
 router = APIRouter(prefix="/api/provider", tags=["provider"])
 
@@ -203,7 +204,37 @@ def accept_quotation(
         raise HTTPException(409, "Only the customer's selected quotation can be accepted.")
     application = _application(db, quotation.application_id, provider)
     quotation.status = "accepted"
-    application.status = "provider_accepted"
+    existing = db.scalar(
+        select(MarketplacePolicy).where(MarketplacePolicy.application_id == application.id)
+    )
+    if existing is None:
+        marketplace_policy = MarketplacePolicy(
+            owner_id=application.owner_id,
+            application_id=application.id,
+            quotation_id=quotation.id,
+            provider_id=provider.provider_id,
+        )
+        db.add(marketplace_policy)
+        terms = dict(quotation.plan_terms)
+        plan = {
+            **terms,
+            "id": quotation.id,
+            "name": terms.get("name") or "Marketplace health policy",
+            "annual_premium": float(quotation.premium),
+        }
+        db.add(
+            Policy(
+                owner_id=application.owner_id,
+                status="demo_active",
+                snapshot={
+                    "plan": plan,
+                    "start_date": date.today().isoformat(),
+                    "payment_frequency": "annual",
+                    "marketplace_policy_id": marketplace_policy.id,
+                },
+            )
+        )
+    application.status = "bound"
     db.commit()
     return _quotation_payload(quotation)
 
@@ -216,9 +247,8 @@ def start_policy(
 ):
     quotation = _quotation(db, quotation_id, provider)
     application = _application(db, quotation.application_id, provider)
-    approved_quotation = require_binding_approval(db, application)
-    if approved_quotation.id != quotation.id:
-        raise HTTPException(409, "This quotation is not approved for binding.")
+    if quotation.status != "accepted":
+        raise HTTPException(409, "Only an accepted quotation can start a policy.")
     existing = db.scalar(
         select(MarketplacePolicy).where(MarketplacePolicy.application_id == application.id)
     )
