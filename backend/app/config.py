@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-20b"
     groq_stt_model: str = "whisper-large-v3"
     send_real_emergency_alert: bool = False
+    oncall_webhook_url: str = ""
+    oncall_webhook_token: str = ""
+    oncall_response_target_minutes: int = 15
+    claim_confidence_threshold: float = 0.6
+    claim_duplicate_threshold: float = 0.8
+    claim_auto_approve_cap_aed: int = 10000
     document_encryption_key: str = ""
     payment_provider: str = "simulator"
     razorpay_key_id: str = ""

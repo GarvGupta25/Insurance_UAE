@@ -86,6 +86,66 @@ def extract_identity(content: bytes):
     }
 
 
+def extract_claim_attachment(content: bytes, filename: str, doc_type: str) -> dict:
+    """Parse a bounded attachment into data only. Source text never enters an agent prompt."""
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Use a document smaller than 10 MB.")
+    text = ""
+    if content.startswith(b"%PDF-"):
+        try:
+            with fitz.open(stream=content, filetype="pdf") as document:
+                if document.is_encrypted or len(document) > 5:
+                    raise HTTPException(422, "Use an unlocked PDF of up to five pages.")
+                for page in document:
+                    embedded = page.get_text()
+                    if embedded.strip():
+                        text += embedded[:10000]
+                    else:
+                        pixels = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                        if pixels.width * pixels.height > 20000000:
+                            raise HTTPException(422, "Image resolution is too large.")
+                        image = Image.open(BytesIO(pixels.tobytes("png")))
+                        if settings().tesseract_cmd:
+                            pytesseract.pytesseract.tesseract_cmd = settings().tesseract_cmd
+                        text += pytesseract.image_to_string(image, timeout=20)[:10000]
+                        image.close()
+        except fitz.FileDataError:
+            raise HTTPException(422, "This PDF cannot be read.") from None
+        except (pytesseract.TesseractNotFoundError, RuntimeError):
+            raise HTTPException(503, "Local image OCR is unavailable.") from None
+    else:
+        try:
+            image = Image.open(BytesIO(content))
+            if image.format not in {"JPEG", "PNG"} or image.width * image.height > 20000000:
+                raise HTTPException(422, "Use a JPG/PNG with at most 20 million pixels.")
+            if settings().tesseract_cmd:
+                pytesseract.pytesseract.tesseract_cmd = settings().tesseract_cmd
+            text = pytesseract.image_to_string(image, timeout=20)[:10000]
+            image.close()
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+            raise HTTPException(422, "This is not a readable JPG, PNG or PDF.") from None
+        except (pytesseract.TesseractNotFoundError, RuntimeError):
+            raise HTTPException(503, "Local image OCR is unavailable.") from None
+    # Only bounded factual fields are retained. Instruction-like source text is discarded.
+    metadata = {"file_name": re.sub(r"[^\w. -]", "", filename)[:80], "description": "Member attachment parsed locally"}
+    for name, pattern in {
+        "provider_name": r"(?:hospital|clinic|provider)\s*[:\-]\s*([^\n]{1,80})",
+        "service_date": r"(?:service date|date of service)\s*[:\-]\s*(\d{4}-\d{2}-\d{2})",
+        "discharge_date": r"discharge date\s*[:\-]\s*(\d{4}-\d{2}-\d{2})",
+        "prescription_date": r"prescription date\s*[:\-]\s*(\d{4}-\d{2}-\d{2})",
+        "amount": r"(?:total|amount)\s*[:\-]?\s*(?:AED\s*)?([\d,]+(?:\.\d{1,2})?)",
+    }.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            metadata[name] = match.group(1).strip()[:80]
+    if doc_type == "prescription" and text.strip():
+        metadata["medication"] = "See uploaded prescription"
+    if doc_type == "discharge_summary" and text.strip():
+        metadata["diagnosis"] = "See uploaded discharge summary"
+    return {"doc_type": doc_type, "metadata": metadata, "text_extracted": bool(text.strip()),
+            "notice": "Please check extracted details. Original file and source text were discarded."}
+
+
 def quotation_pdf(snapshot, quote_id):
     buffer = BytesIO()
     styles = getSampleStyleSheet()

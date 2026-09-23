@@ -44,7 +44,7 @@ def claim_body(reference: str, amount: int = 750) -> dict:
     }
 
 
-def test_emergency_fast_path_is_fixed_immediate_pinned_and_inert(monkeypatch, fixture_client):
+def test_emergency_fast_path_is_pinned_and_does_not_claim_a_page_without_delivery(monkeypatch, fixture_client):
     client, owner, engine = fixture_client
     with Session(engine) as db:
         policy = add_policy(db, owner[0].id)
@@ -69,7 +69,9 @@ def test_emergency_fast_path_is_fixed_immediate_pinned_and_inert(monkeypatch, fi
     )
 
     assert first.status_code == explicit.status_code == 200
-    assert first.json()["message"] == explicit.json()["message"] == claim_agent.EMERGENCY_GUIDANCE
+    assert first.json()["message"] == explicit.json()["message"]
+    assert "could not confirm an on-call page" in first.json()["message"]
+    assert first.json()["route"] == "on_call_broker"
     assert first.json()["alert_sent"] is explicit.json()["alert_sent"] is False
     with Session(engine) as db:
         intake = db.get(ClaimIntake, first.json()["intake_id"])
@@ -80,7 +82,7 @@ def test_emergency_fast_path_is_fixed_immediate_pinned_and_inert(monkeypatch, fi
     with as_assigned_broker(owner, engine):
         queue = client.get("/api/broker/claims").json()
     assert queue[0]["id"] == first.json()["intake_id"]
-    assert queue[0]["transcript"][1]["content"] == claim_agent.EMERGENCY_GUIDANCE
+    assert queue[0]["transcript"][1]["content"] == first.json()["message"]
 
 
 def test_emergency_uses_same_intake_when_documents_arrive(monkeypatch, fixture_client):
@@ -108,7 +110,7 @@ def test_emergency_uses_same_intake_when_documents_arrive(monkeypatch, fixture_c
 
     assert completed.status_code == 200
     assert completed.json()["intake_id"] == emergency["intake_id"]
-    assert completed.json()["route"] == "straight_through"
+    assert completed.json()["route"] == "on_call_broker"
     with Session(engine) as db:
         intake = db.get(ClaimIntake, emergency["intake_id"])
         flag = db.scalar(
@@ -118,7 +120,7 @@ def test_emergency_uses_same_intake_when_documents_arrive(monkeypatch, fixture_c
             )
         )
         assert intake.kind == "claim" and intake.is_emergency is True
-        assert flag.status == "reviewed"
+        assert flag.status == "open"
 
 
 def test_appeal_draft_uses_real_reason_and_only_member_evidence(fixture_client):

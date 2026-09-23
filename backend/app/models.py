@@ -227,7 +227,7 @@ class ClaimIntake(Base):
 
     __tablename__ = "claim_intakes"
     __table_args__ = (
-        CheckConstraint("kind IN ('pre_auth', 'claim', 'reimbursement', 'appeal', 'emergency')"),
+        CheckConstraint("kind IN ('pre_auth', 'claim', 'reimbursement', 'appeal', 'emergency', 'pending')"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -268,6 +268,55 @@ class ClaimFlag(Base):
     flag_type: Mapped[str] = mapped_column(String(24))
     reason: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(24), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimFinding(Base):
+    __tablename__ = "claim_findings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    claim_intake_id: Mapped[str] = mapped_column(ForeignKey("claim_intakes.id", ondelete="CASCADE"), index=True)
+    agent_name: Mapped[str] = mapped_column(String(40))
+    finding_type: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float] = mapped_column(default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimAuditLog(Base):
+    __tablename__ = "claim_audit_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    claim_intake_id: Mapped[str] = mapped_column(ForeignKey("claim_intakes.id", ondelete="CASCADE"), index=True)
+    actor_type: Mapped[str] = mapped_column(String(16))
+    actor_id: Mapped[str] = mapped_column(String(80))
+    action: Mapped[str] = mapped_column(String(80))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class OnCallRoster(Base):
+    __tablename__ = "oncall_roster"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    broker_id: Mapped[str] = mapped_column(String(36), index=True)
+    shift_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    shift_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ClaimDecision(Base):
+    """Phase 1 decision index. Financial authority remains with servicing_events."""
+
+    __tablename__ = "claim_decisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    claim_intake_id: Mapped[str] = mapped_column(ForeignKey("claim_intakes.id", ondelete="CASCADE"), unique=True)
+    servicing_event_id: Mapped[str | None] = mapped_column(ForeignKey("servicing_events.id"), unique=True, nullable=True)
+    decision_type: Mapped[str] = mapped_column(String(40))
+    amount_fils: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decided_by: Mapped[str] = mapped_column(String(80))
+    rationale: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

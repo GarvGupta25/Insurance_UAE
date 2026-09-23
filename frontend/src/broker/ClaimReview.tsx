@@ -16,6 +16,7 @@ type Claim = {
   flags: Array<{ id: string; flag_type: string; reason: string }>;
   transcript: Array<{ role: string; content: string }>;
   suggested_action: { action: ReviewAction; reasoning: string; source: string };
+  case_brief?: { summary: string; document_status: string[]; eligibility: string; cited_clauses: Array<{ clause_id: string; text_snippet: string }>; risk_flags: string[]; suggested_action: ReviewAction; rationale: string };
 };
 
 const actionLabels: Record<ReviewAction, string> = {
@@ -41,6 +42,16 @@ export function ClaimReview() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  async function takeShift() {
+    setBusy(true); setError('');
+    try {
+      const start = new Date(); const end = new Date(start.getTime() + 8 * 60 * 60 * 1000);
+      await post('/api/broker/claims/on-call-shifts', { shift_start: start.toISOString(), shift_end: end.toISOString() });
+      await query.invalidateQueries({ queryKey: ['broker-claims'] });
+      setMessage(`On-call shift started until ${end.toLocaleTimeString()}. Emergency pages require the configured paging connection.`);
+    } catch (reason) { setError((reason as Error).message); } finally { setBusy(false); }
+  }
+
   if (claims.isLoading) return <Loading/>;
   if (claims.error) return <ErrorView error={claims.error}/>;
   const rows = claims.data || [];
@@ -63,6 +74,7 @@ export function ClaimReview() {
 
   return <>
     <div className="page-heading compact"><div><span className="eyebrow">BROKER CLAIM REVIEW</span><h1>Review flagged claims.<br/>Keep every decision human.</h1><p>Emergency claims stay first. Claim Agent suggestions are drafts; edit and confirm the action yourself.</p></div><FileText className="heading-icon" size={54}/></div>
+    <button className="secondary" disabled={busy} onClick={() => void takeShift()}>Start an 8-hour on-call shift</button>
     {analytics.data && <section className="claim-analytics" aria-label="Claim straight-through performance"><span>Claim straight-through rate</span><strong>{analytics.data.straight_through_rate_pct}%</strong><small>{analytics.data.straight_through} of {analytics.data.total_intakes} intakes · {analytics.data.definition}</small></section>}
     {message && <div className="notice" role="status">{message}</div>}
     {error && <ErrorView error={new Error(error)}/>} 
@@ -83,6 +95,7 @@ export function ClaimReview() {
         <section className="claim-detail-section"><h3>Open flags</h3>{selected.flags.map(flag => <div className="claim-flag" key={flag.id}><AlertTriangle size={17}/><div><strong>{flag.flag_type.replaceAll('_', ' ')}</strong><p>{flag.reason}</p></div></div>)}</section>
         <section className="claim-detail-section"><h3>Documents</h3>{selected.documents.map(document => <article className="claim-document" key={document.id}><div><FileText size={17}/><strong>{document.doc_type.replaceAll('_', ' ')}</strong><span className={`badge ${document.completeness_ok ? 'success' : 'urgent'}`}>{document.completeness_ok ? 'Complete' : 'Incomplete'}</span></div><dl>{Object.entries(document.extracted_fields || {}).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></article>)}</section>
         <section className="claim-detail-section"><h3>Full Claim Agent transcript</h3><div className="claim-transcript">{selected.transcript.length ? selected.transcript.map((message, index) => <div key={`${message.role}-${index}`}><MessageSquare size={16}/><p><strong>{message.role.replaceAll('_', ' ')}</strong>{message.content}</p></div>) : <p className="muted">This structured intake has no chat transcript.</p>}</div></section>
+        {selected.case_brief && <section className="claim-detail-section"><h3>Case brief · suggestion only</h3><p>{selected.case_brief.summary}</p><p>Policy match: {selected.case_brief.eligibility}</p>{selected.case_brief.cited_clauses.map(clause => <p key={clause.clause_id}>{clause.clause_id}: {clause.text_snippet}</p>)}{selected.case_brief.document_status.map(doc => <p key={doc}>Missing: {doc}</p>)}{selected.case_brief.risk_flags.map(flag => <p key={flag}>{flag}</p>)}<p>Suggested next step: {actionLabels[selected.case_brief.suggested_action]}. {selected.case_brief.rationale}</p></section>}
         <section className="claim-suggestion"><span className="eyebrow">CLAIM AGENT DRAFT · HUMAN REVIEW REQUIRED</span><h3>{actionLabels[selected.suggested_action.action]}</h3><p>{selected.suggested_action.reasoning}</p></section>
         <div className="broker-review-form"><div className="form-grid"><label className="field">Reviewer action<select value={actions[selected.id] || selected.suggested_action.action} onChange={event => setActions(current => ({ ...current, [selected.id]: event.target.value as ReviewAction }))}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field">Reviewer note<textarea required maxLength={2000} value={notes[selected.id] || ''} onChange={event => setNotes(current => ({ ...current, [selected.id]: event.target.value }))} placeholder="Record the evidence and reason for this action."/></label></div><p className="muted">Payable actions use the verified intake and deterministic servicing rules. No manual payment amount can be entered.</p><button disabled={busy || !notes[selected.id]?.trim()} onClick={() => void confirm(selected)}><Check size={17}/>{busy ? 'Recording action…' : `Confirm ${actionLabels[actions[selected.id] || selected.suggested_action.action]}`}</button></div>
       </article>}

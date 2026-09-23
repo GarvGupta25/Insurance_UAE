@@ -81,7 +81,7 @@ def add_flagged_claim(
     return intake
 
 
-def test_emergency_claims_are_first_and_each_claim_gets_one_draft_call(monkeypatch, fixture_client):
+def test_emergency_claims_are_first_with_read_only_broker_suggestions(monkeypatch, fixture_client):
     client, owner, engine = fixture_client
     with Session(engine) as db:
         policy = add_policy(db, owner[0].id)
@@ -126,8 +126,8 @@ def test_emergency_claims_are_first_and_each_claim_gets_one_draft_call(monkeypat
     assert response.status_code == 200
     rows = response.json()
     assert [row["id"] for row in rows] == [emergency_id, ordinary_id]
-    assert len(calls) == 2
-    assert all("You are drafting a suggestion for a human broker to review and edit - you are not deciding anything." in call["messages"][0]["content"] for call in calls)
+    assert calls == []
+    assert rows[0]["suggested_action"]["source"] == "rule_fallback"
     assert rows[0]["transcript"] == [
         {"role": "member", "content": "Please review CLM-EMERGENCY."},
         {"role": "claim_agent", "content": "I have captured the claim details for broker review."},

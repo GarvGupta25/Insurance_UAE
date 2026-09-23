@@ -1,25 +1,28 @@
-"""Pre-adjudication claim intake; financial decisions remain in servicing.py.
-
-The existing structured submission screen is the Servicing tab in
-``frontend/src/Shopping.tsx``. Document extraction in this demo intentionally
-uses upload metadata supplied by that client; it is not OCR.
-"""
+"""Pre-adjudication claim intake; financial decisions remain in servicing.py."""
 
 import json
 import re
+from datetime import datetime, timezone
+from io import BytesIO
+from xml.sax.saxutils import escape
 from decimal import Decimal
 from statistics import median
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi.responses import Response
 from groq import Groq, GroqError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from .auth import User, current_user, require_broker
 from .config import settings
+from .claims_phase_one import analyze, brief, finding, log, page_oncall
 from .db import session
+from .documents import extract_claim_attachment
 from .explanations import servicing_explanation
 from .models import (
     Audit,
@@ -27,6 +30,10 @@ from .models import (
     ClaimDocument,
     ClaimFlag,
     ClaimIntake,
+    ClaimAuditLog,
+    ClaimDecision,
+    ClaimFinding,
+    OnCallRoster,
     Policy,
     Profile,
     ReviewDecision,
@@ -45,6 +52,7 @@ REQUIRED_DOCUMENTS: dict[str, tuple[str, ...]] = {
     "pre_auth": ("prescription",),
     "claim": ("bill",),
     "reimbursement": ("bill",),
+    "pending": (),
 }
 DOCUMENT_FIELDS: dict[str, tuple[str, ...]] = {
     "bill": ("provider_name", "service_date", "amount"),
@@ -82,17 +90,9 @@ ClaimReviewAction = Literal[
     "deny",
     "escalate_to_senior_broker",
 ]
-CLAIM_REVIEW_ACTIONS = {
-    "approve",
-    "partially_approve",
-    "request_more_information",
-    "deny",
-    "escalate_to_senior_broker",
-}
 EMERGENCY_GUIDANCE = (
-    "You don't need pre-authorization for this — UAE emergency rules require the hospital to treat and "
-    "stabilize you first, and cover applies retroactively once the emergency is confirmed. Get the care "
-    "you need. I'm alerting our team now so the paperwork can be handled without you doing anything else tonight."
+    "If you need urgent care, contact local emergency services or go to the nearest hospital. "
+    "Your claim needs an on-call broker review. Coverage and payment have not been authorized."
 )
 EMERGENCY_TERMS = (
     "chest pain",
@@ -136,6 +136,18 @@ class ClaimReviewInput(BaseModel):
     note: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
+class OnCallShiftInput(BaseModel):
+    shift_start: datetime
+    shift_end: datetime
+
+    @model_validator(mode="after")
+    def valid_shift(self):
+        if (self.shift_start.tzinfo is None or self.shift_end.tzinfo is None
+                or self.shift_end <= self.shift_start):
+            raise ValueError("Use timezone-aware times and an end after the start.")
+        return self
+
+
 class StructuredClaimIntake(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -172,6 +184,14 @@ class FreeFormClaimIntake(BaseModel):
     message: Annotated[str, Field(min_length=1, max_length=4000)]
     documents: list[ClaimDocumentInput] = Field(default_factory=list, max_length=20)
     explicit_emergency: bool = False
+
+
+class AdvocateQuestion(BaseModel):
+    message: Annotated[str, Field(min_length=1, max_length=1000)]
+
+
+class ClaimDocumentFollowup(BaseModel):
+    documents: list[ClaimDocumentInput] = Field(min_length=1, max_length=5)
 
 
 class AppealDraftInput(BaseModel):
@@ -299,16 +319,8 @@ def _is_emergency(message: str) -> bool:
     return bool(re.search(r"\ber\b", normalized)) or any(term in normalized for term in EMERGENCY_TERMS)
 
 
-def _send_emergency_alert(intake_id: str) -> bool:
-    """Deliberately inert until a real provider and staffed on-call process exist."""
-    if not settings().send_real_emergency_alert:
-        return False
-    raise NotImplementedError(
-        f"Emergency alert integration is enabled for {intake_id}, but no approved provider is configured."
-    )
-
-
-def create_emergency_intake(db: Session, policy_id: str, message: str) -> dict:
+def create_emergency_intake(db: Session, policy_id: str, message: str,
+                            documents: list[ClaimDocumentInput] | None = None) -> dict:
     intake = ClaimIntake(
         policy_id=policy_id,
         kind="emergency",
@@ -318,15 +330,28 @@ def create_emergency_intake(db: Session, policy_id: str, message: str) -> dict:
     )
     db.add(intake)
     db.flush()
+    for item in documents or []:
+        complete = all(_has_value(item.metadata.get(field)) for field in DOCUMENT_FIELDS[item.doc_type])
+        db.add(ClaimDocument(claim_intake_id=intake.id, doc_type=item.doc_type,
+                             extracted_fields=item.metadata, completeness_ok=complete))
+    db.flush()
     _flag(db, intake.id, "emergency", "Emergency intake requires immediate human follow-up.")
-    alert_sent = _send_emergency_alert(intake.id)
+    analysis = analyze(db, intake, db.get(Policy, policy_id), REQUIRED_DOCUMENTS)
+    finding(db, intake.id, "intake_extraction", "emergency_flag", {"explicit_or_detected": True}, 1.0)
+    page = page_oncall(db, intake)
+    brief(db, intake, analysis, "on_call_broker")
+    log(db, intake.id, "system", "claim_router", "route_selected", {"route": "on_call_broker", "reason": "emergency"})
+    guidance = EMERGENCY_GUIDANCE + (" An on-call broker has been paged." if page["sent"] else " We could not confirm an on-call page; please contact your insurer directly.")
+    intake.structured_fields = {"claim_agent_response": guidance}
     return {
         "intake_id": intake.id,
         "kind": "emergency",
         "is_emergency": True,
-        "route": "review",
-        "message": EMERGENCY_GUIDANCE,
-        "alert_sent": alert_sent,
+        "route": "on_call_broker",
+        "message": guidance,
+        "alert_sent": page["sent"],
+        "oncall_status": page,
+        "oncall_response_target_minutes": getattr(settings(), "oncall_response_target_minutes", 15),
         "regulatory_timeline": REGULATORY_TIMERS["emergency"],
     }
 
@@ -342,23 +367,14 @@ def create_free_form_intake(
     ]
     follow_up = FOLLOW_UPS[missing_fields[0]] if missing_fields else None
     kind = extracted.get("kind")
-    if kind is None:
-        return {
-            "intake_id": None,
-            "structured_fields": extracted,
-            "completeness_ok": False,
-            "missing_fields": missing_fields,
-            "missing": [],
-            "follow_up": follow_up,
-        }
-
-    amount_field = AMOUNT_FIELDS[kind]
+    amount_field = AMOUNT_FIELDS.get(kind)
     fields = {key: value for key, value in extracted.items() if key not in {"kind", "amount"}}
-    fields[amount_field] = extracted.get("amount")
+    if amount_field:
+        fields[amount_field] = extracted.get("amount")
     fields["follow_up"] = follow_up
     intake = ClaimIntake(
         policy_id=policy_id,
-        kind=kind,
+        kind=kind or "pending",
         raw_message=body.message,
         structured_fields=fields,
     )
@@ -367,7 +383,7 @@ def create_free_form_intake(
     missing_documents = _document_completeness(db, intake, body.documents)
     return {
         "intake_id": intake.id,
-        "kind": kind,
+        "kind": intake.kind,
         "structured_fields": fields,
         "completeness_ok": not missing_fields and not missing_documents,
         "missing_fields": missing_fields,
@@ -453,7 +469,7 @@ def _documents_complete(db: Session, intake: ClaimIntake) -> bool:
         select(ClaimDocument).where(ClaimDocument.claim_intake_id == intake.id)
     ).all()
     complete_types = {document.doc_type for document in documents if document.completeness_ok}
-    return all(document.completeness_ok for document in documents) and set(
+    return {document.doc_type for document in documents}.issubset(complete_types) and set(
         REQUIRED_DOCUMENTS[intake.kind]
     ).issubset(complete_types)
 
@@ -481,35 +497,41 @@ def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_resul
     intake = db.get(ClaimIntake, intake_id)
     if intake is None:
         return intake_result
-    if not _documents_complete(db, intake):
-        _flag(db, intake.id, "missing_docs", "Required claim documents are incomplete or missing.")
-        return {**intake_result, "route": "review"}
-    missing = _missing_intake_data(intake)
-    if missing:
-        _flag(db, intake.id, "missing_docs", f"Missing intake fields: {', '.join(missing)}.")
-        return {**intake_result, "route": "review"}
-    _flag_explainable_anomalies(db, intake)
-    if db.scalar(
-        select(ClaimFlag.id).where(ClaimFlag.claim_intake_id == intake.id, ClaimFlag.status == "open")
-    ):
-        return {**intake_result, "route": "review"}
-
+    if intake.kind in AMOUNT_FIELDS:
+        _flag_explainable_anomalies(db, intake)
+    analysis = analyze(db, intake, policy, REQUIRED_DOCUMENTS)
+    config = settings()
+    amount_field = AMOUNT_FIELDS.get(intake.kind)
+    amount = intake.structured_fields.get(amount_field) if amount_field else None
     annual_limit = policy.snapshot.get("plan", {}).get("annual_limit")
-    if not isinstance(annual_limit, (int, float)) or isinstance(annual_limit, bool) or annual_limit <= 0:
-        _flag(db, intake.id, "exclusion_risk", "Verified plan terms do not include an annual limit.")
-        return {**intake_result, "route": "review"}
+    threshold = Decimal(str(annual_limit)) * REVIEW_LIMIT_FRACTION if isinstance(annual_limit, (int, float)) and annual_limit > 0 else None
+    if isinstance(amount, (int, float)) and threshold is not None and Decimal(str(amount)) >= threshold:
+        _flag(db, intake.id, "high_value", f"AED {Decimal(str(amount))} meets or exceeds the AED {threshold} review threshold (10% of the annual limit).")
+    if intake.is_emergency or intake.structured_fields.get("emergency_origin"):
+        route = "on_call_broker"
+    elif (analysis["confidence"] < getattr(config, "claim_confidence_threshold", 0.6)
+          or analysis["duplicate_score"] > getattr(config, "claim_duplicate_threshold", 0.8)
+          or not analysis["docs_complete"] or analysis["eligibility"] != "covered"
+          or not _has_value(amount) or Decimal(str(amount)) > getattr(config, "claim_auto_approve_cap_aed", 10000)
+          or threshold is None or Decimal(str(amount)) >= threshold
+          or db.scalar(select(ClaimFlag.id).where(ClaimFlag.claim_intake_id == intake.id,
+                                                  ClaimFlag.status == "open"))):
+        route = "review"
+    else:
+        route = "auto_decision"
+    log(db, intake.id, "system", "claim_router", "route_selected",
+        {"route": route, "confidence": analysis["confidence"], "duplicate_score": analysis["duplicate_score"],
+         "eligibility": analysis["eligibility"], "docs_complete": analysis["docs_complete"]})
+    brief(db, intake, analysis, route)
+    if route != "auto_decision":
+        if not analysis["docs_complete"]:
+            _flag(db, intake.id, "missing_docs", "Required claim documents are incomplete or missing.")
+        elif analysis["missing_fields"]:
+            _flag(db, intake.id, "missing_docs", f"Missing intake fields: {', '.join(analysis['missing_fields'])}.")
+        if analysis["eligibility"] == "unclear" or threshold is None:
+            _flag(db, intake.id, "exclusion_risk", "Verified policy clause is missing; human review is required.")
+        return {**intake_result, "route": route}
     request = _servicing_request(intake, policy)
-    amount = Decimal(str(request[AMOUNT_FIELDS[intake.kind]]))
-    threshold = Decimal(str(annual_limit)) * REVIEW_LIMIT_FRACTION
-    if amount >= threshold:
-        _flag(
-            db,
-            intake.id,
-            "high_value",
-            f"AED {amount} meets or exceeds the AED {threshold} review threshold (10% of the annual limit).",
-        )
-        return {**intake_result, "route": "review"}
-
     decision, _ = record_financial_event(db, policy, request)
     intake.structured_fields = {**intake.structured_fields, "servicing_event_id": decision["id"]}
     if decision["outcome"] == "insufficient_data":
@@ -525,6 +547,10 @@ def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_resul
             "decision": decision,
             "member_explanation": servicing_explanation(decision, "member"),
         }
+    db.add(ClaimDecision(claim_intake_id=intake.id, servicing_event_id=decision["id"],
+                         decision_type=decision["outcome"], amount_fils=decision.get("plan_pays_fils"),
+                         decided_by="servicing_engine", rationale=decision.get("reason_code") or "Deterministic servicing result"))
+    log(db, intake.id, "system", "servicing_engine", "decision_recorded", {"servicing_event_id": decision["id"], "outcome": decision["outcome"]})
     return {
         **intake_result,
         "route": "straight_through",
@@ -568,7 +594,7 @@ def free_form_intake(
 
     def action():
         if body.explicit_emergency or _is_emergency(body.message):
-            return create_emergency_intake(db, policy_id, body.message)
+            return create_emergency_intake(db, policy_id, body.message, body.documents)
         result = create_free_form_intake(db, policy_id, body)
         return result if result["intake_id"] is None else route_claim_intake(db, policy, result["intake_id"], result)
 
@@ -579,6 +605,118 @@ def free_form_intake(
         {"action": "free_form_claim_intake", "policy_id": policy_id, **body.model_dump(mode="json")},
         action,
     )
+
+
+@router.post("/attachments/parse")
+async def parse_claim_attachment(policy_id: str, doc_type: DocumentType,
+                                 file: UploadFile = File(...), user: User = Depends(current_user),
+                                 db: Session = Depends(session)):
+    own(db, Policy, policy_id, user)
+    content = await file.read(10 * 1024 * 1024 + 1)
+    return extract_claim_attachment(content, file.filename or "attachment", doc_type)
+
+
+@router.post("/advocate")
+def claim_advocate(policy_id: str, body: AdvocateQuestion, user: User = Depends(current_user),
+                   db: Session = Depends(session)):
+    policy = own(db, Policy, policy_id, user)
+    question = body.message.casefold()
+    latest = db.scalar(select(ClaimIntake).where(ClaimIntake.policy_id == policy_id)
+                       .order_by(ClaimIntake.created_at.desc()))
+    if any(word in question for word in ("medical advice", "diagnos", "treatment", "legal advice", "lawyer")):
+        reply = "I can't give medical or legal advice. Please speak with your doctor or legal adviser. Your broker can request medical review."
+    elif any(word in question for word in ("letter", "proof", "certificate")):
+        reply = "You can download your policy proof letter below. It confirms saved policy details, not claim approval or payment."
+    elif any(word in question for word in ("status", "review", "why", "claim")):
+        if latest:
+            flags = db.scalars(select(ClaimFlag).where(ClaimFlag.claim_intake_id == latest.id,
+                                                       ClaimFlag.status == "open")).all()
+            documents = db.scalar(select(ClaimFinding).where(ClaimFinding.claim_intake_id == latest.id,
+                                                              ClaimFinding.agent_name == "document_verification")
+                                  .order_by(ClaimFinding.created_at.desc()))
+            event_id = latest.structured_fields.get("servicing_event_id")
+            decision = db.get(ServicingEvent, event_id) if isinstance(event_id, str) else None
+            stage = _timeline_for(latest, flags, decision)["stage"].replace("_", " ")
+            reason = " ".join(flag.reason for flag in flags[:2])
+            reply = f"Your latest claim is at {stage}. {reason}".strip()
+            if documents and documents.payload.get("missing_docs"):
+                reply += " Please upload: " + ", ".join(documents.payload["missing_docs"]) + "."
+            if latest.is_emergency:
+                reply += " If you need urgent care, contact local emergency services or the hospital."
+        else:
+            reply = "I cannot see a saved claim yet. Describe what happened above or use the emergency button if urgent."
+    elif any(word in question for word in ("cover", "policy", "benefit", "limit", "matern", "chronic", "dental", "optical", "network")):
+        plan = policy.snapshot.get("plan", {})
+        clause = ("maternity" if "matern" in question else
+                  "chronic_preexisting" if any(word in question for word in ("chronic", "pre-existing")) else
+                  "dental_optical" if any(word in question for word in ("dental", "optical")) else
+                  "network" if "network" in question else "annual_limit")
+        reply = (f"Your saved plan is {plan.get('name', 'unnamed')}. "
+                 f"Policy clause plan.{clause}: {str(plan.get(clause, 'not available'))[:300]}. "
+                 "This does not confirm whether a particular claim is payable; submit the details for review.")
+    else:
+        reply = "I can explain your saved policy, your latest claim status, or provide a proof-of-coverage letter. What would help?"
+    if latest:
+        log(db, latest.id, "agent", "claim_advocate", "member_guidance", {"question": body.message, "reply": reply})
+        db.commit()
+    return {"reply": reply, "proof_url": f"/api/policies/{policy_id}/claim-intakes/proof-of-coverage" if "letter" in question or "proof" in question else None}
+
+
+@router.get("/proof-of-coverage")
+def proof_of_coverage(policy_id: str, user: User = Depends(current_user), db: Session = Depends(session)):
+    policy = own(db, Policy, policy_id, user)
+    plan = policy.snapshot.get("plan", {})
+    member = db.scalar(select(Profile).where(Profile.owner_id == user.id))
+    name = member.facts.get("legal_name") if member else user.email
+    buffer = BytesIO()
+    styles = getSampleStyleSheet()
+    lines = ["HELM AI / POLICY PROOF", "Demonstration record only. This is not an insurer-issued authorization.",
+             f"Member: {name}", f"Policy: {policy.id}", f"Status: {policy.status}",
+             f"Plan: {plan.get('name', 'Not available')}",
+             f"Annual limit: AED {plan.get('annual_limit', 'Not available')} (plan.annual_limit)",
+             "No claim approval, treatment guarantee or payment is represented by this letter."]
+    story = [Paragraph(escape(line), styles["Title"] if index == 0 else styles["Normal"])
+             for index, line in enumerate(lines)]
+    story.insert(1, Spacer(1, 16))
+    SimpleDocTemplate(buffer).build(story)
+    return Response(buffer.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="helm-policy-{policy.id}.pdf"'})
+
+
+@router.post("/{claim_intake_id}/documents")
+def add_claim_documents(policy_id: str, claim_intake_id: str, body: ClaimDocumentFollowup,
+                        user: User = Depends(current_user), db: Session = Depends(session),
+                        idempotency_key: str = Header()):
+    policy = own(db, Policy, policy_id, user, lock=True)
+    intake = db.scalar(select(ClaimIntake).where(ClaimIntake.id == claim_intake_id,
+                                                 ClaimIntake.policy_id == policy.id).with_for_update())
+    if not intake:
+        raise HTTPException(404, "Claim intake not found.")
+
+    def action():
+        if db.scalar(select(ClaimDecision.id).where(ClaimDecision.claim_intake_id == intake.id)):
+            raise HTTPException(409, "This claim already has a recorded decision.")
+        for item in body.documents:
+            complete = all(_has_value(item.metadata.get(field)) for field in DOCUMENT_FIELDS[item.doc_type])
+            db.add(ClaimDocument(claim_intake_id=intake.id, doc_type=item.doc_type,
+                                 extracted_fields=item.metadata, completeness_ok=complete))
+        db.flush()
+        log(db, intake.id, "system", "document_ingest", "documents_received",
+            {"document_types": [item.doc_type for item in body.documents]})
+        for flag in db.scalars(select(ClaimFlag).where(ClaimFlag.claim_intake_id == intake.id,
+                                                       ClaimFlag.flag_type == "missing_docs",
+                                                       ClaimFlag.status == "open")).all():
+            flag.status = "reviewed"
+        if intake.kind in AMOUNT_FIELDS:
+            return route_claim_intake(db, policy, intake.id, {"intake_id": intake.id})
+        analysis = analyze(db, intake, policy, REQUIRED_DOCUMENTS)
+        route = "on_call_broker" if intake.is_emergency else "review"
+        brief(db, intake, analysis, route)
+        log(db, intake.id, "system", "claim_router", "route_selected", {"route": route, "reason": "document_followup"})
+        return {"intake_id": intake.id, "route": route}
+
+    return command(db, user, idempotency_key,
+                   {"action": "claim_documents", "claim_id": claim_intake_id, **body.model_dump(mode="json")}, action)
 
 
 @router.post("/{claim_intake_id}/complete")
@@ -619,15 +757,6 @@ def complete_emergency_intake(
                 "missing": missing,
                 "route": "review",
             }
-        emergency_flags = db.scalars(
-            select(ClaimFlag).where(
-                ClaimFlag.claim_intake_id == intake.id,
-                ClaimFlag.flag_type == "emergency",
-                ClaimFlag.status == "open",
-            )
-        ).all()
-        for flag in emergency_flags:
-            flag.status = "reviewed"
         result = {
             "intake_id": intake.id,
             "kind": intake.kind,
@@ -651,7 +780,7 @@ def complete_emergency_intake(
     )
 
 
-def _timeline_for(intake: ClaimIntake, flags: list[ClaimFlag], decision: ServicingEvent | None) -> dict:
+def _timeline_for(intake: ClaimIntake, flags: list[ClaimFlag], decision: ServicingEvent | ClaimDecision | None) -> dict:
     if intake.is_emergency:
         timer = REGULATORY_TIMERS["emergency"]
     elif intake.kind == "pre_auth":
@@ -659,7 +788,7 @@ def _timeline_for(intake: ClaimIntake, flags: list[ClaimFlag], decision: Servici
         timer = REGULATORY_TIMERS[f"pre_auth_{setting}"]
     else:
         timer = REGULATORY_TIMERS.get(intake.kind, REGULATORY_TIMERS["claim"])
-    if decision and decision.outcome != "insufficient_data":
+    if decision and getattr(decision, "outcome", getattr(decision, "decision_type", None)) != "insufficient_data":
         stage = "decision_recorded"
     elif any(flag.status == "open" for flag in flags):
         stage = "human_review"
@@ -698,24 +827,37 @@ def member_claim_intakes(
         ).all()
         event_id = intake.structured_fields.get("servicing_event_id")
         decision = db.get(ServicingEvent, event_id) if isinstance(event_id, str) else None
+        recorded = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == intake.id))
+        document_finding = db.scalar(select(ClaimFinding).where(ClaimFinding.claim_intake_id == intake.id,
+                                                               ClaimFinding.agent_name == "document_verification")
+                                     .order_by(ClaimFinding.created_at.desc()))
+        visible_decision = recorded if recorded and recorded.decision_type == "denied" else decision or recorded
+        page = db.scalar(select(ClaimAuditLog).where(ClaimAuditLog.claim_intake_id == intake.id,
+                                                     ClaimAuditLog.action == "page_attempted")
+                         .order_by(ClaimAuditLog.created_at.desc())) if intake.is_emergency else None
         rows.append(
             {
                 "id": intake.id,
                 "kind": intake.kind,
                 "is_emergency": intake.is_emergency,
+                "oncall_page_sent": bool(page and page.payload.get("sent")),
+                "oncall_response_target_minutes": getattr(settings(), "oncall_response_target_minutes", 15) if page and page.payload.get("sent") else None,
                 "created_at": intake.created_at.isoformat(),
-                "timeline": _timeline_for(intake, flags, decision),
+                "timeline": _timeline_for(intake, flags, visible_decision),
                 "flags": [
                     {"flag_type": flag.flag_type, "reason": flag.reason, "status": flag.status}
                     for flag in flags
                 ],
+                "missing_documents": document_finding.payload.get("missing_docs", []) if document_finding else [],
                 "decision": (
                     {
                         "event_id": decision.root_id,
                         "outcome": decision.outcome,
                         "calculation": decision.calculation,
                     }
-                    if decision
+                    if decision and visible_decision is decision
+                    else {"event_id": intake.id, "outcome": recorded.decision_type,
+                          "calculation": [recorded.rationale]} if recorded
                     else None
                 ),
                 "why_not_black_box": (
@@ -816,44 +958,10 @@ def _suggested_claim_action(claim: dict) -> dict:
         if "missing_docs" in flags
         else "escalate_to_senior_broker"
     )
-    fallback = {
+    return {
         "action": fallback_action,
         "reasoning": "Human review is required for the open claim flags before any decision is recorded.",
         "source": "rule_fallback",
-    }
-    cfg = settings()
-    if not cfg.groq_api_key:
-        return fallback
-    instruction = (
-        "You are drafting a suggestion for a human broker to review and edit - you are not deciding anything. "
-        "Base your suggestion only on the claim data provided. Return JSON with action and reasoning. action must "
-        "be approve, partially_approve, request_more_information, deny, or escalate_to_senior_broker."
-    )
-    try:
-        response = Groq(api_key=cfg.groq_api_key, timeout=20, max_retries=0).chat.completions.create(
-            model=cfg.groq_model,
-            temperature=0,
-            response_format={"type": "json_object"},
-            max_tokens=400,
-            messages=[
-                {"role": "system", "content": instruction},
-                {"role": "user", "content": json.dumps(claim, default=str)},
-            ],
-        )
-        suggestion = json.loads(response.choices[0].message.content or "{}")
-    except (GroqError, ValueError, TypeError, KeyError, AttributeError, IndexError):
-        return fallback
-    if (
-        not isinstance(suggestion, dict)
-        or suggestion.get("action") not in CLAIM_REVIEW_ACTIONS
-        or not isinstance(suggestion.get("reasoning"), str)
-        or not suggestion["reasoning"].strip()
-    ):
-        return fallback
-    return {
-        "action": suggestion["action"],
-        "reasoning": suggestion["reasoning"].strip()[:2000],
-        "source": "claim_agent",
     }
 
 
@@ -909,8 +1017,35 @@ def _claim_review_item(
         ],
         "transcript": _claim_transcript(intake),
     }
-    item["suggested_action"] = _suggested_claim_action(item)
+    case_brief = db.scalar(select(ClaimFinding).where(ClaimFinding.claim_intake_id == intake.id,
+                                                     ClaimFinding.agent_name == "broker_brief")
+                           .order_by(ClaimFinding.created_at.desc()))
+    item["case_brief"] = case_brief.payload if case_brief else None
+    item["suggested_action"] = ({"action": case_brief.payload["suggested_action"],
+                                 "reasoning": case_brief.payload["rationale"], "source": "broker_brief"}
+                                if case_brief else _suggested_claim_action(item))
     return item
+
+
+def _oncall_exists(db: Session, broker_id: str) -> bool:
+    now = datetime.now(timezone.utc)
+    return db.scalar(select(OnCallRoster.id).where(OnCallRoster.broker_id == broker_id,
+                                                  OnCallRoster.is_active.is_(True),
+                                                  OnCallRoster.shift_start <= now,
+                                                  OnCallRoster.shift_end > now)) is not None
+
+
+@broker_router.post("/on-call-shifts")
+def start_oncall_shift(body: OnCallShiftInput, user: User = Depends(require_broker),
+                       db: Session = Depends(session), idempotency_key: str = Header()):
+    def action():
+        shift = OnCallRoster(broker_id=user.id, shift_start=body.shift_start,
+                             shift_end=body.shift_end, is_active=True)
+        db.add(shift)
+        db.flush()
+        return {"id": shift.id, "shift_start": shift.shift_start.isoformat(),
+                "shift_end": shift.shift_end.isoformat()}
+    return command(db, user, idempotency_key, {"action": "oncall_shift", **body.model_dump(mode="json")}, action)
 
 
 @broker_router.get("")
@@ -921,8 +1056,9 @@ def broker_claims(
     rows = db.execute(
         select(ClaimIntake, Policy)
         .join(Policy, Policy.id == ClaimIntake.policy_id)
-        .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
-        .where(BrokerAssignment.broker_id == user.id)
+        .outerjoin(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+        .where(or_(BrokerAssignment.broker_id == user.id,
+                   ClaimIntake.is_emergency.is_(True) & _oncall_exists(db, user.id)))
         .order_by(ClaimIntake.created_at)
     ).all()
     items = []
@@ -978,8 +1114,10 @@ def review_claim(
     row = db.execute(
         select(ClaimIntake, Policy)
         .join(Policy, Policy.id == ClaimIntake.policy_id)
-        .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
-        .where(ClaimIntake.id == claim_intake_id, BrokerAssignment.broker_id == user.id)
+        .outerjoin(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+        .where(ClaimIntake.id == claim_intake_id,
+               or_(BrokerAssignment.broker_id == user.id,
+                   ClaimIntake.is_emergency.is_(True) & _oncall_exists(db, user.id)))
         .with_for_update()
     ).first()
     if row is None:
@@ -998,6 +1136,8 @@ def review_claim(
         decision = None
         servicing_event_id = None
         if body.action in {"approve", "partially_approve"}:
+            if intake.kind not in AMOUNT_FIELDS:
+                raise HTTPException(422, "Clarify the claim type before a payable review action.")
             missing = _missing_intake_data(intake)
             if missing or not _documents_complete(db, intake):
                 raise HTTPException(422, "A payable action requires complete intake fields and documents.")
@@ -1009,6 +1149,9 @@ def review_claim(
                 **intake.structured_fields,
                 "servicing_event_id": servicing_event_id,
             }
+            db.add(ClaimDecision(claim_intake_id=intake.id, servicing_event_id=servicing_event_id,
+                                 decision_type=decision["outcome"], amount_fils=decision.get("plan_pays_fils"),
+                                 decided_by=user.id, rationale=body.note))
 
         before = {
             "claim_intake_id": intake.id,
@@ -1029,6 +1172,12 @@ def review_claim(
         )
         db.add(review)
         db.flush()
+        if body.action == "deny":
+            db.add(ClaimDecision(claim_intake_id=intake.id, servicing_event_id=None,
+                                 decision_type="denied", amount_fils=0,
+                                 decided_by=user.id, rationale=body.note))
+        log(db, intake.id, "broker", user.id, "review_recorded",
+            {"action": body.action, "review_id": review.id, "servicing_event_id": servicing_event_id})
         db.add(
             Audit(
                 owner_id=user.id,
