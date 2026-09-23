@@ -50,3 +50,14 @@
 .claim-followup-upload { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 12px; border-radius: 12px; background: #f3f7ff; }
 .claim-followup-upload label { display: grid; gap: 5px; font-size: 13px; }
 .claim-followup-upload select, .claim-followup-upload input { max-width: 240px; }
+.claim-replay {
+  max-height: 25rem;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid #d9e3f5;
+  border-radius: .75rem;
+  background: #f7f9ff;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: .8rem;
+}

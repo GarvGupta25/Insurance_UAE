@@ -3,8 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Check, FileText, MessageSquare } from 'lucide-react';
 import { api, post } from '../api';
 import { ErrorView, Loading } from '../Shopping';
+import { ClaimOperations } from './ClaimOperations';
 
-type ReviewAction = 'approve' | 'partially_approve' | 'request_more_information' | 'deny' | 'escalate_to_senior_broker';
+type ReviewAction = 'approve' | 'partially_approve' | 'request_more_information' | 'deny' | 'medical_review' | 'escalate_to_senior_broker';
 type Claim = {
   id: string;
   created_at: string;
@@ -17,6 +18,7 @@ type Claim = {
   transcript: Array<{ role: string; content: string }>;
   suggested_action: { action: ReviewAction; reasoning: string; source: string };
   case_brief?: { summary: string; document_status: string[]; eligibility: string; cited_clauses: Array<{ clause_id: string; text_snippet: string }>; risk_flags: string[]; suggested_action: ReviewAction; rationale: string };
+  provisional_amount_fils?: number | null;
 };
 
 const actionLabels: Record<ReviewAction, string> = {
@@ -24,6 +26,7 @@ const actionLabels: Record<ReviewAction, string> = {
   partially_approve: 'Partially approve',
   request_more_information: 'Request more information',
   deny: 'Deny',
+  medical_review: 'Medical review',
   escalate_to_senior_broker: 'Escalate to senior broker',
 };
 
@@ -72,10 +75,19 @@ export function ClaimReview() {
     } finally { setBusy(false); }
   }
 
+  async function reviewAppeal(claim: Claim, action: 'uphold' | 'reopen_for_review') {
+    const note = notes[claim.id]?.trim();
+    if (!note) { setError('Add a reviewer note before deciding this appeal.'); return; }
+    setBusy(true); setError('');
+    try { await post(`/api/broker/claims/${claim.id}/appeal-review`, { action, note }); setMessage(`Appeal ${action.replaceAll('_', ' ')} recorded by you.`); await query.invalidateQueries({ queryKey: ['broker-claims'] }); }
+    catch (reason) { setError((reason as Error).message); } finally { setBusy(false); }
+  }
+
   return <>
     <div className="page-heading compact"><div><span className="eyebrow">BROKER CLAIM REVIEW</span><h1>Review flagged claims.<br/>Keep every decision human.</h1><p>Emergency claims stay first. Claim Agent suggestions are drafts; edit and confirm the action yourself.</p></div><FileText className="heading-icon" size={54}/></div>
     <button className="secondary" disabled={busy} onClick={() => void takeShift()}>Start an 8-hour on-call shift</button>
     {analytics.data && <section className="claim-analytics" aria-label="Claim straight-through performance"><span>Claim straight-through rate</span><strong>{analytics.data.straight_through_rate_pct}%</strong><small>{analytics.data.straight_through} of {analytics.data.total_intakes} intakes · {analytics.data.definition}</small></section>}
+    <ClaimOperations/>
     {message && <div className="notice" role="status">{message}</div>}
     {error && <ErrorView error={new Error(error)}/>} 
     {!rows.length ? <div className="empty-state"><Check size={32}/><h3>No flagged claims need review.</h3><p>New assigned claims with open flags will appear here.</p></div> : <div className="claim-review-layout">
@@ -90,6 +102,8 @@ export function ClaimReview() {
       </aside>
       {selected && <article className={`surface claim-review-detail ${selected.is_emergency ? 'emergency' : ''}`}>
         {selected.is_emergency && <div className="claim-emergency-banner"><AlertTriangle size={20}/><strong>Emergency claim — review before all non-emergency work.</strong></div>}
+        {selected.provisional_amount_fils != null && <div className="notice"><strong>Provisional — pending final decision: AED {(selected.provisional_amount_fils / 100).toFixed(2)}</strong><p>Sandbox authorization only. Compare with the final deterministic decision before closing review.</p></div>}
+        {selected.intake.kind === 'appeal' && <div className="notice"><strong>Appeals are human-decided.</strong><p>Inspect the original reason, member statement and new evidence below. Neither agent nor auto rule can decide this.</p></div>}
         <div className="section-heading"><div><span className="eyebrow">COMPLETE CLAIM INTAKE</span><h2>{selected.claimant.name || 'Assigned member'} · {selected.intake.kind.replaceAll('_', ' ')}</h2><p>Policy {selected.policy.id} · {selected.policy.plan.name || selected.policy.status}</p></div></div>
         <section className="claim-detail-section"><h3>Intake fields</h3><dl className="claim-field-grid">{Object.entries(selected.intake.structured_fields).filter(([key]) => key !== 'follow_up').map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></section>
         <section className="claim-detail-section"><h3>Open flags</h3>{selected.flags.map(flag => <div className="claim-flag" key={flag.id}><AlertTriangle size={17}/><div><strong>{flag.flag_type.replaceAll('_', ' ')}</strong><p>{flag.reason}</p></div></div>)}</section>
@@ -97,7 +111,7 @@ export function ClaimReview() {
         <section className="claim-detail-section"><h3>Full Claim Agent transcript</h3><div className="claim-transcript">{selected.transcript.length ? selected.transcript.map((message, index) => <div key={`${message.role}-${index}`}><MessageSquare size={16}/><p><strong>{message.role.replaceAll('_', ' ')}</strong>{message.content}</p></div>) : <p className="muted">This structured intake has no chat transcript.</p>}</div></section>
         {selected.case_brief && <section className="claim-detail-section"><h3>Case brief · suggestion only</h3><p>{selected.case_brief.summary}</p><p>Policy match: {selected.case_brief.eligibility}</p>{selected.case_brief.cited_clauses.map(clause => <p key={clause.clause_id}>{clause.clause_id}: {clause.text_snippet}</p>)}{selected.case_brief.document_status.map(doc => <p key={doc}>Missing: {doc}</p>)}{selected.case_brief.risk_flags.map(flag => <p key={flag}>{flag}</p>)}<p>Suggested next step: {actionLabels[selected.case_brief.suggested_action]}. {selected.case_brief.rationale}</p></section>}
         <section className="claim-suggestion"><span className="eyebrow">CLAIM AGENT DRAFT · HUMAN REVIEW REQUIRED</span><h3>{actionLabels[selected.suggested_action.action]}</h3><p>{selected.suggested_action.reasoning}</p></section>
-        <div className="broker-review-form"><div className="form-grid"><label className="field">Reviewer action<select value={actions[selected.id] || selected.suggested_action.action} onChange={event => setActions(current => ({ ...current, [selected.id]: event.target.value as ReviewAction }))}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="field">Reviewer note<textarea required maxLength={2000} value={notes[selected.id] || ''} onChange={event => setNotes(current => ({ ...current, [selected.id]: event.target.value }))} placeholder="Record the evidence and reason for this action."/></label></div><p className="muted">Payable actions use the verified intake and deterministic servicing rules. No manual payment amount can be entered.</p><button disabled={busy || !notes[selected.id]?.trim()} onClick={() => void confirm(selected)}><Check size={17}/>{busy ? 'Recording action…' : `Confirm ${actionLabels[actions[selected.id] || selected.suggested_action.action]}`}</button></div>
+        <div className="broker-review-form"><div className="form-grid">{selected.intake.kind !== 'appeal' && <label className="field">Reviewer action<select value={actions[selected.id] || selected.suggested_action.action} onChange={event => setActions(current => ({ ...current, [selected.id]: event.target.value as ReviewAction }))}>{Object.entries(actionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}<label className="field">Reviewer note<textarea required maxLength={2000} value={notes[selected.id] || ''} onChange={event => setNotes(current => ({ ...current, [selected.id]: event.target.value }))} placeholder="Record the evidence and reason for this action."/></label></div><p className="muted">Payable actions use the verified intake and deterministic servicing rules. No manual payment amount can be entered.</p>{selected.intake.kind === 'appeal' ? <div><button disabled={busy || !notes[selected.id]?.trim()} onClick={() => void reviewAppeal(selected, 'uphold')}>Uphold denial</button> <button disabled={busy || !notes[selected.id]?.trim()} onClick={() => void reviewAppeal(selected, 'reopen_for_review')}>Reopen for review</button></div> : <button disabled={busy || !notes[selected.id]?.trim()} onClick={() => void confirm(selected)}><Check size={17}/>{busy ? 'Recording action…' : `Confirm ${actionLabels[actions[selected.id] || selected.suggested_action.action]}`}</button>}</div>
       </article>}
     </div>}
   </>;

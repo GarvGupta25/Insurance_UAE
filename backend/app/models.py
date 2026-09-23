@@ -311,13 +311,50 @@ class ClaimDecision(Base):
     __tablename__ = "claim_decisions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    claim_intake_id: Mapped[str] = mapped_column(ForeignKey("claim_intakes.id", ondelete="CASCADE"), unique=True)
+    claim_intake_id: Mapped[str] = mapped_column(ForeignKey("claim_intakes.id", ondelete="CASCADE"), index=True)
     servicing_event_id: Mapped[str | None] = mapped_column(ForeignKey("servicing_events.id"), unique=True, nullable=True)
     decision_type: Mapped[str] = mapped_column(String(40))
     amount_fils: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decided_by: Mapped[str] = mapped_column(String(80))
     rationale: Mapped[str] = mapped_column(Text)
+    provisional_applied_fils: Mapped[int] = mapped_column(Integer, default=0)
+    net_due_fils: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ProvisionalAuthRule(Base):
+    __tablename__ = "provisional_auth_rules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    policy_type: Mapped[str] = mapped_column(String(80), index=True)
+    claim_category: Mapped[str] = mapped_column(String(80))
+    max_amount_fils: Mapped[int] = mapped_column(Integer)
+    requires_conditions: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimAutoRule(Base):
+    __tablename__ = "claim_auto_rules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    policy_type: Mapped[str] = mapped_column(String(80), index=True)
+    claim_category: Mapped[str] = mapped_column(String(80))
+    max_amount_fils: Mapped[int] = mapped_column(Integer)
+    min_confidence: Mapped[float] = mapped_column(default=0.8)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimQualityAudit(Base):
+    __tablename__ = "claim_quality_audits"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    claim_intake_id: Mapped[str] = mapped_column(ForeignKey("claim_intakes.id", ondelete="CASCADE"), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    reviewer_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PolicyReassessment(Owned, Base):

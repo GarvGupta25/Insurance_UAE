@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, Download, FileCheck2, FileText, ShieldCheck, CircleAlert, Plus, Wallet, ArrowUpRight, ClipboardCheck, Paperclip, X } from 'lucide-react';
-import { api, post, aed, downloadQuote, type Config } from './api';
+import { api, post, aed, downloadQuote, auth, type Config } from './api';
 import { ProfileEditor } from './ProfileEditor';
 import { Conversation } from './Conversation';
 import { ReadAloud, VoiceInput } from './Voice';
@@ -92,6 +92,27 @@ function ClaimStatusCard({ item, policyId }: { item: any; policyId: string }) {
   const [docType, setDocType] = useState(item.missing_documents?.[0] || 'other');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [appealText, setAppealText] = useState('');
+  const [appealEvidence, setAppealEvidence] = useState('');
+  const [appealNotice, setAppealNotice] = useState('');
+  async function downloadProvisional() {
+    try {
+      const session = auth ? (await auth.auth.getSession()).data.session : null;
+      const response = await fetch(`/api/policies/${policyId}/claim-intakes/${item.id}/provisional-letter`, { headers: session ? { Authorization: `Bearer ${session.access_token}` } : {} });
+      if (!response.ok) throw new Error('The provisional letter could not be downloaded.');
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a'); link.href = url; link.download = `provisional-${item.id}.pdf`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { setAppealNotice((error as Error).message); }
+  }
+  async function submitClaimAppeal() {
+    try { await post(`/api/policies/${policyId}/claim-intakes/${item.id}/appeal`, { statement: appealText, evidence: appealEvidence.split('\n').map(x => x.trim()).filter(Boolean) }); setAppealNotice('Appeal prepared and sent for human broker review.'); await query.invalidateQueries({ queryKey: ['claim-intakes', policyId] }); }
+    catch (error) { setAppealNotice((error as Error).message); }
+  }
+  async function draftClaimAppeal() {
+    try { const result = await post(`/api/policies/${policyId}/claim-intakes/${item.id}/appeal-draft`, { evidence: appealEvidence.split('\n').map(x => x.trim()).filter(Boolean) }); setAppealText(result.statement); setAppealNotice('Draft prepared. Review and edit it before submitting.'); }
+    catch (error) { setAppealNotice((error as Error).message); }
+  }
   async function upload(file: File | undefined) {
     if (!file) return;
     setUploading(true); setUploadError('');
@@ -108,6 +129,10 @@ function ClaimStatusCard({ item, policyId }: { item: any; policyId: string }) {
     <ol className="claim-status-timeline">{item.timeline.steps.map((step: any) => <li className={step.active ? 'active' : step.complete ? 'complete' : ''} key={step.name}><span>{step.complete ? '✓' : '○'}</span>{step.name}</li>)}</ol>
     <p className="muted">{item.timeline.target}</p>
     {item.is_emergency && <p className="claim-flag">{item.oncall_page_sent ? `An on-call broker has been paged. Response target: ${remainingMinutes ? `${remainingMinutes} minutes remaining` : 'target time reached'}.` : 'An on-call page has not been confirmed. Contact your insurer directly while seeking urgent care.'}</p>}
+    {item.provisional_amount_fils != null && <div className="notice"><strong>Sandbox provisional authorization: {aed(item.provisional_amount_fils)}</strong><p>{item.net_due_fils == null ? 'Pending final broker review.' : 'Final broker decision recorded.'} This is not real insurer payment or a treatment guarantee.</p><button type="button" onClick={() => void downloadProvisional()}><Download size={16}/> Download provisional letter</button>{item.net_due_fils != null && <p>Final reconciliation: {aed(item.provisional_applied_fils)} applied; {aed(item.net_due_fils)} remains in the simulated decision.{item.provisional_excess_fils > 0 ? ` ${aed(item.provisional_excess_fils)} exceeds the final amount and needs manual broker reconciliation.` : ''}</p>}</div>}
+    {item.updates?.length > 0 && <section aria-label="Claim updates"><strong>Live updates</strong>{item.updates.map((update: any, index: number) => <p key={`${update.at}-${index}`} className="muted">{new Date(update.at).toLocaleString('en-GB')} · {update.message}</p>)}</section>}
+    {item.decision?.outcome === 'denied' && <details><summary>Appeal this decision</summary><p>A broker—not the assistant—will decide your appeal.</p><label className="field">What should be reconsidered?<textarea value={appealText} onChange={event => setAppealText(event.target.value)}/></label><label className="field">New evidence, one item per line<textarea value={appealEvidence} onChange={event => setAppealEvidence(event.target.value)}/></label><button type="button" onClick={() => void draftClaimAppeal()} disabled={!appealEvidence.trim()}>Help me draft</button> <button type="button" onClick={() => void submitClaimAppeal()} disabled={appealText.trim().length < 10 || !appealEvidence.trim()}>Send appeal for human review</button></details>}
+    {appealNotice && <p role="status">{appealNotice}</p>}
     {item.flags?.filter((flag: any) => flag.status === 'open').map((flag: any) => <p className="claim-flag" key={`${flag.flag_type}-${flag.reason}`}><CircleAlert size={16}/>{flag.reason}</p>)}
     {item.missing_documents?.map((name: string) => <p className="claim-flag" key={name}>Please upload a complete {name.replaceAll('_', ' ')}.</p>)}
     {item.missing_documents?.length > 0 && item.timeline.stage !== 'decision_recorded' && <div className="claim-followup-upload"><label>Document type <select value={docType} onChange={event => setDocType(event.target.value)}><option value="bill">Bill</option><option value="discharge_summary">Discharge summary</option><option value="prescription">Prescription</option><option value="other">Other</option></select></label><label>Upload for this claim <input type="file" accept="image/jpeg,image/png,application/pdf" disabled={uploading} onChange={event => { void upload(event.target.files?.[0]); event.currentTarget.value = ''; }}/></label>{uploading && <span>Checking document…</span>}{uploadError && <span role="alert">{uploadError}</span>}</div>}
@@ -129,6 +154,7 @@ export function PolicyPage({ config }: { config: Config }) {
   const [claimFiles, setClaimFiles] = useState<File[]>([]);
   const [claimFileTypes, setClaimFileTypes] = useState<Record<string, string>>({});
   const [claimReceipt, setClaimReceipt] = useState(false);
+  const [emergencyCategory, setEmergencyCategory] = useState('other');
   const [appealForm, setAppealForm] = useState({ appeal_id: '', contested_event_id: '', statement: '', evidence: '' });
   const policy = useQuery({ queryKey: ['policy', policyId], queryFn: () => api(`/api/policies/${policyId}`) });
   const profile = useQuery({ queryKey: ['profile'], queryFn: () => api('/api/me/profile') });
@@ -159,7 +185,7 @@ export function PolicyPage({ config }: { config: Config }) {
   }));
   function addClaimFiles(files: FileList | null) { const selected = Array.from(files || []); const invalid = selected.find(file => !(file.type === 'image/jpeg' || file.type === 'image/png' || file.type === 'application/pdf') || file.size > 10 * 1024 * 1024); if (invalid) { setError('Attach only JPG, PNG, or PDF files up to 10 MB each.'); return; } setClaimFiles(current => [...current, ...selected].slice(0, 5)); setClaimFileTypes(current => ({ ...Object.fromEntries(selected.map(file => [file.name, suggestedDocumentType(file.name)])), ...current })); }
   async function submitClaimMessage(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); setError(''); setClaimReply(null); setClaimReceipt(false); try { const result = await post(`/api/policies/${policyId}/claim-intakes/free-form`, { message: claimMessage, documents: await claimDocuments() }); setClaimReply(result); setClaimReceipt(true); setClaimMessage(''); setClaimFiles([]); setClaimFileTypes({}); await query.invalidateQueries({ queryKey: ['claim-intakes', policyId] }); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
-  async function submitEmergency() { setBusy(true); setError(''); setClaimReply(null); setClaimReceipt(false); try { const result = await post(`/api/policies/${policyId}/claim-intakes/free-form`, { message: claimMessage.trim() || 'The member used the explicit emergency button.', documents: await claimDocuments(), explicit_emergency: true }); setClaimReply(result); setClaimReceipt(true); setClaimMessage(''); setClaimFiles([]); setClaimFileTypes({}); await query.invalidateQueries({ queryKey: ['claim-intakes', policyId] }); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
+  async function submitEmergency() { setBusy(true); setError(''); setClaimReply(null); setClaimReceipt(false); try { const result = await post(`/api/policies/${policyId}/claim-intakes/free-form`, { message: claimMessage.trim() || 'The member used the explicit emergency button.', documents: await claimDocuments(), explicit_emergency: true, emergency_category: emergencyCategory }); setClaimReply(result); setClaimReceipt(true); setClaimMessage(''); setClaimFiles([]); setClaimFileTypes({}); await query.invalidateQueries({ queryKey: ['claim-intakes', policyId] }); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   async function draftAppeal() { const evidence = appealForm.evidence.split('\n').map(item => item.trim()).filter(Boolean); if (!appealForm.contested_event_id || !evidence.length) { setError('Select a denied decision and add the new evidence first.'); return; } setBusy(true); setError(''); try { const result = await post(`/api/policies/${policyId}/claim-intakes/appeal-draft`, { contested_event_id: appealForm.contested_event_id, new_evidence: evidence }); setAppealForm(current => ({ ...current, statement: result.statement })); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   async function submitAppeal(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); setError(''); setServicingResult(''); try { await post(`/api/policies/${policyId}/appeals`, { appeal_id: appealForm.appeal_id, contested_event_id: appealForm.contested_event_id, statement: appealForm.statement, evidence: appealForm.evidence.split('\n').map(item => item.trim()).filter(Boolean) }); setServicingResult('Appeal submitted for broker review.'); setAppealForm({ appeal_id: '', contested_event_id: '', statement: '', evidence: '' }); await query.invalidateQueries({ queryKey: ['policy', policyId] }); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   if (policy.isLoading) return <Loading/>; if (policy.error) return <ErrorView error={policy.error}/>; const data = policy.data; const p = data.plan; const verified = data.status === 'demo_active';
@@ -168,6 +194,7 @@ export function PolicyPage({ config }: { config: Config }) {
   for (const item of data.servicing || []) if (item.record_type === 'decision' || item.record_type === 'revision') latestDecisions.set(item.event_id, item);
   const appealableDecisions = [...latestDecisions.values()].filter((item: any) => item.outcome === 'denied' && (item.kind === 'claim' || item.kind === 'reimbursement') && !appealedDecisionIds.has(data.servicing.find((source: any) => source.event_id === item.event_id && source.record_type === 'decision')?.id));
   return <><div className="page-heading compact"><div><span className="eyebrow">YOUR POLICY</span><h1>{p.name}</h1><p>All the important details. Ready when you need them.</p></div><span className="badge neutral">{verified ? 'Demo policy · no real cover' : 'Unverified import'}</span></div>
+    {tab === 'Claim Center' && <label className="field">Emergency category for the red button<select value={emergencyCategory} onChange={event => setEmergencyCategory(event.target.value)}><option value="other">Other emergency — broker review only</option><option value="emergency_room_admission">Emergency room admission — check provisional eligibility</option></select></label>}
     <nav className="tabs wide-tabs" aria-label="Policy sections">{['Overview', 'Servicing', 'Claim Center', 'Payments', 'Nearby care', 'Ask Helm'].map(t => <button aria-pressed={t === tab} onClick={() => setTab(t)} key={t}>{t}</button>)}</nav>
     {!verified && <div className="notice">Policy terms have not been verified. Premiums, network membership and benefit balances are unknown.</div>}
     {tab === 'Overview' && <><div className="metric-grid"><div><span>Coverage start</span><strong>{data.start_date}</strong><small>Saved policy date</small></div><div><span>Annual premium</span><strong>{p.annual_premium ? aed(p.annual_premium * 100) : 'Unknown'}</strong><small>{verified ? 'Fictional catalogue amount' : 'Evidence needed'}</small></div><div><span>Network</span><strong>{p.network || 'Unknown'}</strong><small>{verified ? 'Frozen at selection' : 'Not inferred'}</small></div></div>

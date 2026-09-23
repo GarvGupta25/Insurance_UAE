@@ -2,12 +2,13 @@
 
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
-from io import BytesIO
-from xml.sax.saxutils import escape
 from decimal import Decimal
+from io import BytesIO
 from statistics import median
 from typing import Annotated, Literal
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -21,6 +22,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from .auth import User, current_user, require_broker
 from .config import settings
 from .claims_phase_one import analyze, brief, finding, log, page_oncall
+from .claims_lifecycle import auto_cap, final_amount, provisional, review_sample, sample_auto_decision, validate_cap_raise
 from .db import session
 from .documents import extract_claim_attachment
 from .explanations import servicing_explanation
@@ -33,8 +35,11 @@ from .models import (
     ClaimAuditLog,
     ClaimDecision,
     ClaimFinding,
+    ClaimAutoRule,
+    ClaimQualityAudit,
     OnCallRoster,
     Policy,
+    ProvisionalAuthRule,
     Profile,
     ReviewDecision,
     ServicingEvent,
@@ -88,6 +93,7 @@ ClaimReviewAction = Literal[
     "partially_approve",
     "request_more_information",
     "deny",
+    "medical_review",
     "escalate_to_senior_broker",
 ]
 EMERGENCY_GUIDANCE = (
@@ -184,6 +190,7 @@ class FreeFormClaimIntake(BaseModel):
     message: Annotated[str, Field(min_length=1, max_length=4000)]
     documents: list[ClaimDocumentInput] = Field(default_factory=list, max_length=20)
     explicit_emergency: bool = False
+    emergency_category: Literal["emergency_room_admission", "other"] | None = None
 
 
 class AdvocateQuestion(BaseModel):
@@ -320,12 +327,13 @@ def _is_emergency(message: str) -> bool:
 
 
 def create_emergency_intake(db: Session, policy_id: str, message: str,
-                            documents: list[ClaimDocumentInput] | None = None) -> dict:
+                            documents: list[ClaimDocumentInput] | None = None,
+                            category: str | None = None) -> dict:
     intake = ClaimIntake(
         policy_id=policy_id,
         kind="emergency",
         raw_message=message,
-        structured_fields={"claim_agent_response": EMERGENCY_GUIDANCE},
+        structured_fields={"claim_agent_response": EMERGENCY_GUIDANCE, "emergency_category": category},
         is_emergency=True,
     )
     db.add(intake)
@@ -339,10 +347,14 @@ def create_emergency_intake(db: Session, policy_id: str, message: str,
     analysis = analyze(db, intake, db.get(Policy, policy_id), REQUIRED_DOCUMENTS)
     finding(db, intake.id, "intake_extraction", "emergency_flag", {"explicit_or_detected": True}, 1.0)
     page = page_oncall(db, intake)
+    provisional_decision = provisional(db, intake, db.get(Policy, policy_id), category or "")
     brief(db, intake, analysis, "on_call_broker")
     log(db, intake.id, "system", "claim_router", "route_selected", {"route": "on_call_broker", "reason": "emergency"})
     guidance = EMERGENCY_GUIDANCE + (" An on-call broker has been paged." if page["sent"] else " We could not confirm an on-call page; please contact your insurer directly.")
-    intake.structured_fields = {"claim_agent_response": guidance}
+    if provisional_decision:
+        guidance += (f" A sandbox provisional authorization of AED {provisional_decision.amount_fils / 100:,.2f} "
+                     "was recorded, pending final broker review. This is not a real payment guarantee.")
+    intake.structured_fields = {"claim_agent_response": guidance, "emergency_category": category}
     return {
         "intake_id": intake.id,
         "kind": "emergency",
@@ -351,6 +363,7 @@ def create_emergency_intake(db: Session, policy_id: str, message: str,
         "message": guidance,
         "alert_sent": page["sent"],
         "oncall_status": page,
+        "provisional_amount_fils": provisional_decision.amount_fils if provisional_decision else None,
         "oncall_response_target_minutes": getattr(settings(), "oncall_response_target_minutes", 15),
         "regulatory_timeline": REGULATORY_TIMERS["emergency"],
     }
@@ -507,12 +520,14 @@ def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_resul
     threshold = Decimal(str(annual_limit)) * REVIEW_LIMIT_FRACTION if isinstance(annual_limit, (int, float)) and annual_limit > 0 else None
     if isinstance(amount, (int, float)) and threshold is not None and Decimal(str(amount)) >= threshold:
         _flag(db, intake.id, "high_value", f"AED {Decimal(str(amount))} meets or exceeds the AED {threshold} review threshold (10% of the annual limit).")
+    category_cap = auto_cap(db, policy, intake.structured_fields.get("benefit_class", ""),
+                            getattr(config, "claim_auto_approve_cap_aed", 10000), analysis["confidence"])
     if intake.is_emergency or intake.structured_fields.get("emergency_origin"):
         route = "on_call_broker"
     elif (analysis["confidence"] < getattr(config, "claim_confidence_threshold", 0.6)
           or analysis["duplicate_score"] > getattr(config, "claim_duplicate_threshold", 0.8)
           or not analysis["docs_complete"] or analysis["eligibility"] != "covered"
-          or not _has_value(amount) or Decimal(str(amount)) > getattr(config, "claim_auto_approve_cap_aed", 10000)
+          or not _has_value(amount) or Decimal(str(amount)) > category_cap
           or threshold is None or Decimal(str(amount)) >= threshold
           or db.scalar(select(ClaimFlag.id).where(ClaimFlag.claim_intake_id == intake.id,
                                                   ClaimFlag.status == "open"))):
@@ -521,7 +536,11 @@ def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_resul
         route = "auto_decision"
     log(db, intake.id, "system", "claim_router", "route_selected",
         {"route": route, "confidence": analysis["confidence"], "duplicate_score": analysis["duplicate_score"],
-         "eligibility": analysis["eligibility"], "docs_complete": analysis["docs_complete"]})
+         "eligibility": analysis["eligibility"], "docs_complete": analysis["docs_complete"],
+         "amount_aed": amount, "category_cap_aed": category_cap,
+         "annual_review_floor_aed": float(threshold) if threshold is not None else None,
+         "cited_clauses": analysis["cited_clauses"], "missing_fields": analysis["missing_fields"],
+         "missing_docs": analysis["missing_docs"]})
     brief(db, intake, analysis, route)
     if route != "auto_decision":
         if not analysis["docs_complete"]:
@@ -547,9 +566,12 @@ def route_claim_intake(db: Session, policy: Policy, intake_id: str, intake_resul
             "decision": decision,
             "member_explanation": servicing_explanation(decision, "member"),
         }
+    applied, net_due = final_amount(db, intake.id, decision.get("plan_pays_fils"))
     db.add(ClaimDecision(claim_intake_id=intake.id, servicing_event_id=decision["id"],
                          decision_type=decision["outcome"], amount_fils=decision.get("plan_pays_fils"),
+                         provisional_applied_fils=applied, net_due_fils=net_due,
                          decided_by="servicing_engine", rationale=decision.get("reason_code") or "Deterministic servicing result"))
+    sample_auto_decision(db, intake.id)
     log(db, intake.id, "system", "servicing_engine", "decision_recorded", {"servicing_event_id": decision["id"], "outcome": decision["outcome"]})
     return {
         **intake_result,
@@ -594,7 +616,7 @@ def free_form_intake(
 
     def action():
         if body.explicit_emergency or _is_emergency(body.message):
-            return create_emergency_intake(db, policy_id, body.message, body.documents)
+            return create_emergency_intake(db, policy_id, body.message, body.documents, body.emergency_category)
         result = create_free_form_intake(db, policy_id, body)
         return result if result["intake_id"] is None else route_claim_intake(db, policy, result["intake_id"], result)
 
@@ -605,6 +627,34 @@ def free_form_intake(
         {"action": "free_form_claim_intake", "policy_id": policy_id, **body.model_dump(mode="json")},
         action,
     )
+
+
+class RuleInput(BaseModel):
+    policy_type: Annotated[str, Field(min_length=1, max_length=80)]
+    claim_category: Annotated[str, Field(min_length=1, max_length=80)]
+    max_amount_aed: Annotated[int, Field(gt=0, le=100000)]
+    min_confidence: Annotated[float, Field(ge=0, le=1)] = 0.8
+    requires_conditions: list[Literal["emergency_flag", "active_policy", "covered_category"]] = Field(default_factory=list)
+    active: bool = True
+
+
+class QualityReviewInput(BaseModel):
+    status: Literal["correct", "incorrect"]
+    note: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class ClaimAppealInput(BaseModel):
+    statement: Annotated[str, Field(min_length=10, max_length=2000)]
+    evidence: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(min_length=1, max_length=20)
+
+
+class ClaimAppealDraftInput(BaseModel):
+    evidence: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(min_length=1, max_length=20)
+
+
+class ClaimAppealReviewInput(BaseModel):
+    action: Literal["uphold", "reopen_for_review"]
+    note: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
 @router.post("/attachments/parse")
@@ -788,7 +838,9 @@ def _timeline_for(intake: ClaimIntake, flags: list[ClaimFlag], decision: Servici
         timer = REGULATORY_TIMERS[f"pre_auth_{setting}"]
     else:
         timer = REGULATORY_TIMERS.get(intake.kind, REGULATORY_TIMERS["claim"])
-    if decision and getattr(decision, "outcome", getattr(decision, "decision_type", None)) != "insufficient_data":
+    if intake.kind == "appeal" and not any(flag.status == "open" for flag in flags):
+        stage = "appeal_reviewed"
+    elif decision and getattr(decision, "outcome", getattr(decision, "decision_type", None)) != "insufficient_data":
         stage = "decision_recorded"
     elif any(flag.status == "open" for flag in flags):
         stage = "human_review"
@@ -800,8 +852,8 @@ def _timeline_for(intake: ClaimIntake, flags: list[ClaimFlag], decision: Servici
         "steps": [
             {"name": "Intake received", "complete": True},
             {"name": "Completeness checked", "complete": bool(flags) or decision is not None},
-            {"name": "Human review", "complete": stage == "decision_recorded", "active": stage == "human_review"},
-            {"name": "Decision recorded", "complete": stage == "decision_recorded"},
+            {"name": "Human review", "complete": stage in {"decision_recorded", "appeal_reviewed"}, "active": stage == "human_review"},
+            {"name": "Decision recorded", "complete": stage in {"decision_recorded", "appeal_reviewed"}},
         ],
     }
 
@@ -827,7 +879,10 @@ def member_claim_intakes(
         ).all()
         event_id = intake.structured_fields.get("servicing_event_id")
         decision = db.get(ServicingEvent, event_id) if isinstance(event_id, str) else None
-        recorded = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == intake.id))
+        decisions = db.scalars(select(ClaimDecision).where(ClaimDecision.claim_intake_id == intake.id)
+                               .order_by(ClaimDecision.created_at, ClaimDecision.id)).all()
+        provisional_record = next((row for row in decisions if row.decision_type == "provisional"), None)
+        recorded = next((row for row in decisions if row.decision_type != "provisional"), None)
         document_finding = db.scalar(select(ClaimFinding).where(ClaimFinding.claim_intake_id == intake.id,
                                                                ClaimFinding.agent_name == "document_verification")
                                      .order_by(ClaimFinding.created_at.desc()))
@@ -843,6 +898,15 @@ def member_claim_intakes(
                 "oncall_page_sent": bool(page and page.payload.get("sent")),
                 "oncall_response_target_minutes": getattr(settings(), "oncall_response_target_minutes", 15) if page and page.payload.get("sent") else None,
                 "created_at": intake.created_at.isoformat(),
+                "provisional_amount_fils": provisional_record.amount_fils if provisional_record else None,
+                "provisional_applied_fils": recorded.provisional_applied_fils if recorded else 0,
+                "net_due_fils": recorded.net_due_fils if recorded else None,
+                "provisional_excess_fils": max(0, (provisional_record.amount_fils or 0) - (recorded.amount_fils or 0)) if provisional_record and recorded else None,
+                "updates": [{"action": event.action, "at": event.created_at.isoformat(),
+                             "message": _member_update(event.action, event.payload)} for event in
+                            db.scalars(select(ClaimAuditLog).where(ClaimAuditLog.claim_intake_id == intake.id)
+                                       .order_by(ClaimAuditLog.created_at, ClaimAuditLog.id)).all()
+                            if _member_update(event.action, event.payload)],
                 "timeline": _timeline_for(intake, flags, visible_decision),
                 "flags": [
                     {"flag_type": flag.flag_type, "reason": flag.reason, "status": flag.status}
@@ -965,6 +1029,26 @@ def _suggested_claim_action(claim: dict) -> dict:
     }
 
 
+def _member_update(action: str, payload: dict) -> str | None:
+    if action == "page_attempted":
+        return "Your emergency claim reached the on-call queue." if payload.get("sent") else "An on-call page was not confirmed; contact your insurer directly."
+    if action == "provisional_issued":
+        return f"A provisional sandbox authorization of AED {payload['amount_fils'] / 100:,.2f} is ready, pending final review."
+    if action == "provisional_not_issued":
+        return "No provisional authorization was issued; your claim remains with the broker."
+    if action == "route_selected":
+        return "Your details are being checked by the broker." if payload.get("route") != "auto_decision" else "Your documents and policy terms passed the automatic checks."
+    if action == "decision_recorded":
+        return "The deterministic servicing decision is ready."
+    if action == "review_recorded":
+        return f"A broker recorded: {payload.get('action', 'review')}."
+    if action == "appeal_prepared":
+        return "Your appeal has been prepared for a human broker. It cannot be decided automatically."
+    if action == "appeal_reviewed":
+        return f"A broker reviewed your appeal: {payload.get('action', 'reviewed').replace('_', ' ')}."
+    return None
+
+
 def _claim_review_item(
     db: Session,
     intake: ClaimIntake,
@@ -977,8 +1061,11 @@ def _claim_review_item(
         .order_by(ClaimDocument.created_at, ClaimDocument.id)
     ).all()
     member = db.scalar(select(Profile).where(Profile.owner_id == policy.owner_id))
+    provisional_record = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == intake.id,
+                                                               ClaimDecision.decision_type == "provisional"))
     item = {
         "id": intake.id,
+        "provisional_amount_fils": provisional_record.amount_fils if provisional_record else None,
         "created_at": intake.created_at.isoformat(),
         "is_emergency": intake.is_emergency or any(flag.flag_type == "emergency" for flag in flags),
         "intake": {
@@ -1149,8 +1236,10 @@ def review_claim(
                 **intake.structured_fields,
                 "servicing_event_id": servicing_event_id,
             }
+            applied, net_due = final_amount(db, intake.id, decision.get("plan_pays_fils"))
             db.add(ClaimDecision(claim_intake_id=intake.id, servicing_event_id=servicing_event_id,
                                  decision_type=decision["outcome"], amount_fils=decision.get("plan_pays_fils"),
+                                 provisional_applied_fils=applied, net_due_fils=net_due,
                                  decided_by=user.id, rationale=body.note))
 
         before = {
@@ -1173,8 +1262,10 @@ def review_claim(
         db.add(review)
         db.flush()
         if body.action == "deny":
+            applied, net_due = final_amount(db, intake.id, 0)
             db.add(ClaimDecision(claim_intake_id=intake.id, servicing_event_id=None,
                                  decision_type="denied", amount_fils=0,
+                                 provisional_applied_fils=applied, net_due_fils=net_due,
                                  decided_by=user.id, rationale=body.note))
         log(db, intake.id, "broker", user.id, "review_recorded",
             {"action": body.action, "review_id": review.id, "servicing_event_id": servicing_event_id})
@@ -1212,3 +1303,232 @@ def review_claim(
         {"action": "review_claim", "claim_intake_id": claim_intake_id, **body.model_dump(mode="json")},
         action,
     )
+
+
+@router.get("/{claim_intake_id}/provisional-letter")
+def provisional_letter(policy_id: str, claim_intake_id: str, user: User = Depends(current_user),
+                       db: Session = Depends(session)):
+    policy = own(db, Policy, policy_id, user)
+    intake = db.scalar(select(ClaimIntake).where(ClaimIntake.id == claim_intake_id, ClaimIntake.policy_id == policy.id))
+    decision = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == claim_intake_id,
+                                                    ClaimDecision.decision_type == "provisional")) if intake else None
+    if not decision:
+        raise HTTPException(404, "No provisional authorization was issued for this claim.")
+    final = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == claim_intake_id,
+                                                 ClaimDecision.decision_type != "provisional"))
+    buffer = BytesIO()
+    document = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    lines = ["Helm AI — provisional authorization (sandbox)", f"Claim reference: {intake.id}",
+             f"Policy reference: {policy.id}", f"Category: {intake.structured_fields.get('emergency_category')}",
+             f"Provisional cap: AED {(decision.amount_fils or 0) / 100:,.2f}",
+             f"Status: {'final decision recorded' if final else 'pending final broker review'}",
+             "This is a demonstration document, not insurer authorization, a payment guarantee or proof of real cover.",
+             "Emergency care must not be delayed while a claim is reviewed."]
+    document.build([Paragraph(escape(line), styles["Normal"]) for line in lines])
+    return Response(buffer.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="provisional-{intake.id}.pdf"'})
+
+
+@router.post("/{claim_intake_id}/appeal-draft")
+def draft_claim_appeal(policy_id: str, claim_intake_id: str, body: ClaimAppealDraftInput,
+                       user: User = Depends(current_user), db: Session = Depends(session)):
+    policy = own(db, Policy, policy_id, user)
+    original = db.scalar(select(ClaimIntake).where(ClaimIntake.id == claim_intake_id,
+                                                   ClaimIntake.policy_id == policy.id))
+    denial = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == claim_intake_id,
+                                                   ClaimDecision.decision_type == "denied")) if original else None
+    if not denial:
+        raise HTTPException(422, "A denied claim is required before drafting an appeal.")
+    return {"statement": f"I ask a broker to reconsider claim {claim_intake_id}. The recorded reason was: "
+                         f"{denial.rationale}. I have new evidence: {'; '.join(body.evidence)}.",
+            "decision_authority": "human_broker_only"}
+
+
+@router.post("/{claim_intake_id}/appeal")
+def appeal_claim_decision(policy_id: str, claim_intake_id: str, body: ClaimAppealInput,
+                          user: User = Depends(current_user), db: Session = Depends(session),
+                          idempotency_key: str = Header()):
+    policy = own(db, Policy, policy_id, user, lock=True)
+    original = db.scalar(select(ClaimIntake).where(ClaimIntake.id == claim_intake_id,
+                                                   ClaimIntake.policy_id == policy.id))
+    denial = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == claim_intake_id,
+                                                   ClaimDecision.decision_type == "denied")) if original else None
+    if not denial:
+        raise HTTPException(422, "Only a denied claim decision can be appealed here.")
+    def action():
+        prior = db.scalars(select(ClaimIntake).where(ClaimIntake.policy_id == policy.id,
+                                                    ClaimIntake.kind == "appeal")).all()
+        if any(row.structured_fields.get("contested_claim_id") == claim_intake_id for row in prior):
+            raise HTTPException(409, "An appeal for this claim is already recorded.")
+        appeal = ClaimIntake(policy_id=policy.id, kind="appeal", raw_message=body.statement,
+                             structured_fields={"contested_claim_id": claim_intake_id, "evidence": body.evidence,
+                                                "original_reason": denial.rationale})
+        db.add(appeal)
+        db.flush()
+        finding(db, appeal.id, "appeals", "appeal_case",
+                {"original_reason": denial.rationale, "member_statement": body.statement,
+                 "new_evidence": body.evidence, "changed_since_decision": body.evidence,
+                 "suggested_route": "human_review", "advisory_only": True}, 1.0)
+        _flag(db, appeal.id, "exclusion_risk", "Appeals always require human broker review.")
+        log(db, appeal.id, "system", "appeals", "appeal_prepared", {"contested_claim_id": claim_intake_id,
+                                                                      "route": "human_review"})
+        return {"appeal_id": appeal.id, "route": "human_review", "status": "pending_review"}
+    return command(db, user, idempotency_key, {"action": "claim_appeal", "claim_id": claim_intake_id,
+                                               **body.model_dump()}, action)
+
+
+@broker_router.post("/{appeal_id}/appeal-review")
+def review_claim_appeal(appeal_id: str, body: ClaimAppealReviewInput,
+                        user: User = Depends(require_broker), db: Session = Depends(session),
+                        idempotency_key: str = Header()):
+    row = db.execute(select(ClaimIntake, Policy).join(Policy, Policy.id == ClaimIntake.policy_id)
+                     .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+                     .where(ClaimIntake.id == appeal_id, ClaimIntake.kind == "appeal",
+                            BrokerAssignment.broker_id == user.id).with_for_update()).first()
+    if not row:
+        raise HTTPException(404, "Appeal not found.")
+    appeal, _ = row
+    def action():
+        if db.scalar(select(ClaimAuditLog.id).where(ClaimAuditLog.claim_intake_id == appeal.id,
+                                                   ClaimAuditLog.action == "appeal_reviewed")):
+            raise HTTPException(409, "This appeal has already been reviewed.")
+        log(db, appeal.id, "broker", user.id, "appeal_reviewed", {"action": body.action, "note": body.note})
+        flags = db.scalars(select(ClaimFlag).where(ClaimFlag.claim_intake_id == appeal.id,
+                                                   ClaimFlag.status == "open")).all()
+        for flag in flags:
+            flag.status = "reviewed"
+        if body.action == "reopen_for_review":
+            original = db.get(ClaimIntake, appeal.structured_fields["contested_claim_id"])
+            _flag(db, original.id, "exclusion_risk", "Appeal accepted for fresh broker review; prior denial remains in history.")
+        return {"appeal_id": appeal.id, "status": "reviewed", "action": body.action}
+    return command(db, user, idempotency_key, {"action": "review_claim_appeal", "appeal_id": appeal_id,
+                                               **body.model_dump()}, action)
+
+
+@broker_router.get("/rules")
+def claim_rules(user: User = Depends(require_broker), db: Session = Depends(session)):
+    return {"provisional": [{"id": row.id, "policy_type": row.policy_type, "claim_category": row.claim_category,
+                              "max_amount_aed": row.max_amount_fils / 100, "requires_conditions": row.requires_conditions,
+                              "active": row.active} for row in db.scalars(select(ProvisionalAuthRule)).all()],
+            "automatic": [{"id": row.id, "policy_type": row.policy_type, "claim_category": row.claim_category,
+                           "max_amount_aed": row.max_amount_fils / 100, "min_confidence": row.min_confidence,
+                           "active": row.active} for row in db.scalars(select(ClaimAutoRule)).all()]}
+
+
+@broker_router.post("/rules/{rule_kind}")
+def save_claim_rule(rule_kind: Literal["provisional", "automatic"], body: RuleInput,
+                    user: User = Depends(require_broker), db: Session = Depends(session),
+                    idempotency_key: str = Header()):
+    model = ProvisionalAuthRule if rule_kind == "provisional" else ClaimAutoRule
+    def action():
+        row = db.scalar(select(model).where(model.policy_type == body.policy_type,
+                                            model.claim_category == body.claim_category).with_for_update())
+        if rule_kind == "automatic":
+            validate_cap_raise(db, row.max_amount_fils if row else 1000000, body.max_amount_aed * 100,
+                               body.policy_type, body.claim_category)
+        if row is None:
+            row = model(policy_type=body.policy_type, claim_category=body.claim_category,
+                        max_amount_fils=body.max_amount_aed * 100, updated_by=user.id)
+            db.add(row)
+        row.max_amount_fils, row.active, row.updated_by = body.max_amount_aed * 100, body.active, user.id
+        if rule_kind == "provisional":
+            if set(body.requires_conditions) != {"emergency_flag", "active_policy", "covered_category"}:
+                raise HTTPException(422, "Provisional rules must require emergency, active policy and covered category checks.")
+            row.requires_conditions = body.requires_conditions
+        else:
+            row.min_confidence = body.min_confidence
+        db.flush()
+        return {"id": row.id, "active": row.active}
+    return command(db, user, idempotency_key, {"action": "save_claim_rule", "kind": rule_kind, **body.model_dump()}, action)
+
+
+@broker_router.get("/observability")
+def claim_observability(user: User = Depends(require_broker), db: Session = Depends(session)):
+    claim_ids = db.scalars(select(ClaimIntake.id).join(Policy, Policy.id == ClaimIntake.policy_id)
+                           .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+                           .where(BrokerAssignment.broker_id == user.id)).all()
+    routes = Counter()
+    durations = {}
+    pages = 0
+    paged_on_time = 0
+    for claim_id in claim_ids:
+        intake = db.get(ClaimIntake, claim_id)
+        events = db.scalars(select(ClaimAuditLog).where(ClaimAuditLog.claim_intake_id == claim_id)
+                            .order_by(ClaimAuditLog.created_at)).all()
+        route = next((event.payload.get("route") for event in events if event.action == "route_selected"), "pending")
+        if any(event.action == "provisional_issued" for event in events):
+            route = "provisional"
+        routes[route] += 1
+        final = db.scalar(select(ClaimDecision).where(ClaimDecision.claim_intake_id == claim_id,
+                                                     ClaimDecision.decision_type != "provisional"))
+        if final:
+            durations.setdefault(route, []).append((final.created_at - intake.created_at).total_seconds())
+        if intake.is_emergency:
+            pages += 1
+            page = next((event for event in events if event.action == "page_attempted" and event.payload.get("sent")), None)
+            if page and (page.created_at - intake.created_at).total_seconds() <= 60:
+                paged_on_time += 1
+    audits = db.scalars(select(ClaimQualityAudit).where(ClaimQualityAudit.claim_intake_id.in_(claim_ids))).all() if claim_ids else []
+    reviewed = [audit for audit in audits if audit.status != "pending"]
+    return {"routes": dict(routes), "mean_seconds_to_decision": {key: round(sum(values) / len(values)) for key, values in durations.items()},
+            "false_auto_rate_pct": round(100 * sum(item.status == "incorrect" for item in reviewed) / len(reviewed), 1) if reviewed else None,
+            "reviewed_samples": len(reviewed), "pending_samples": sum(item.status == "pending" for item in audits),
+            "oncall_page_within_60_seconds": {"met": paged_on_time, "total": pages}}
+
+
+@broker_router.get("/quality-samples")
+def quality_samples(user: User = Depends(require_broker), db: Session = Depends(session)):
+    rows = db.scalars(select(ClaimQualityAudit).join(ClaimIntake, ClaimIntake.id == ClaimQualityAudit.claim_intake_id)
+                      .join(Policy, Policy.id == ClaimIntake.policy_id)
+                      .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+                      .where(BrokerAssignment.broker_id == user.id, ClaimQualityAudit.status == "pending")).all()
+    return [{"id": row.id, "claim_id": row.claim_intake_id, "created_at": row.created_at.isoformat()} for row in rows]
+
+
+@broker_router.post("/quality-samples/{sample_id}/review")
+def quality_sample_review(sample_id: str, body: QualityReviewInput, user: User = Depends(require_broker),
+                          db: Session = Depends(session), idempotency_key: str = Header()):
+    audit = db.scalar(select(ClaimQualityAudit).join(ClaimIntake, ClaimIntake.id == ClaimQualityAudit.claim_intake_id)
+                      .join(Policy, Policy.id == ClaimIntake.policy_id)
+                      .join(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+                      .where(BrokerAssignment.broker_id == user.id, ClaimQualityAudit.id == sample_id).with_for_update())
+    if not audit:
+        raise HTTPException(404, "Sample not found.")
+    def action():
+        review_sample(db, audit, user.id, body.status, body.note)
+        return {"id": audit.id, "status": audit.status}
+    return command(db, user, idempotency_key, {"action": "quality_review", "sample_id": sample_id, **body.model_dump()}, action)
+
+
+@broker_router.get("/{claim_intake_id}/replay")
+def claim_replay(claim_intake_id: str, user: User = Depends(require_broker), db: Session = Depends(session)):
+    row = db.execute(select(ClaimIntake, Policy).join(Policy, Policy.id == ClaimIntake.policy_id)
+                     .outerjoin(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+                     .where(ClaimIntake.id == claim_intake_id,
+                            or_(BrokerAssignment.broker_id == user.id,
+                                ClaimIntake.is_emergency.is_(True) & _oncall_exists(db, user.id)))).first()
+    if not row:
+        raise HTTPException(404, "Claim not found.")
+    intake, policy = row
+    findings = db.scalars(select(ClaimFinding).where(ClaimFinding.claim_intake_id == intake.id)
+                          .order_by(ClaimFinding.created_at, ClaimFinding.id)).all()
+    events = db.scalars(select(ClaimAuditLog).where(ClaimAuditLog.claim_intake_id == intake.id)
+                        .order_by(ClaimAuditLog.created_at, ClaimAuditLog.id)).all()
+    decisions = db.scalars(select(ClaimDecision).where(ClaimDecision.claim_intake_id == intake.id)
+                           .order_by(ClaimDecision.created_at, ClaimDecision.id)).all()
+    documents = db.scalars(select(ClaimDocument).where(ClaimDocument.claim_intake_id == intake.id)
+                           .order_by(ClaimDocument.created_at, ClaimDocument.id)).all()
+    return {"claim_id": intake.id, "policy_id": policy.id, "input": {"message": intake.raw_message,
+            "structured_fields": intake.structured_fields, "policy_snapshot": policy.snapshot,
+            "documents": [{"type": doc.doc_type, "metadata": doc.extracted_fields,
+                           "complete": doc.completeness_ok} for doc in documents],
+            "submitted_at": intake.created_at.isoformat()},
+            "findings": [{"agent": item.agent_name, "type": item.finding_type, "output": item.payload,
+                          "confidence": item.confidence, "at": item.created_at.isoformat()} for item in findings],
+            "events": [{"actor": item.actor_type, "action": item.action, "payload": item.payload,
+                        "at": item.created_at.isoformat()} for item in events],
+            "decisions": [{"type": item.decision_type, "amount_fils": item.amount_fils,
+                           "provisional_applied_fils": item.provisional_applied_fils,
+                           "net_due_fils": item.net_due_fils, "by": item.decided_by,
+                           "rationale": item.rationale, "at": item.created_at.isoformat()} for item in decisions]}
