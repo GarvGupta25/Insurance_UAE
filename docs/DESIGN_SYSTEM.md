@@ -1,5 +1,0 @@
-# Phase 1 interface conventions
-
-The design uses the existing CSS variables in `frontend/src/styles.css`: navy `#000b33` for primary actions and headings, blue `#315aa5` for interactive emphasis, canvas `#f5f8ff`, white surfaces, muted text `#59677e`, line `#d9e3f2`, and a 22px surface radius. Type falls back from Inter to Segoe UI and Arial. The main controls have a minimum 44px target; focus-visible outlines are explicit. Layout changes for narrow widths in the stylesheet's media queries, and the comparison table remains horizontally scrollable with keyboard focus.
-
-Use the existing `surface`, `notice`, `error`, `badge`, `field`, `section-heading` and `page-heading` primitives before adding new page-specific styling. The public landing and signed-in shell deliberately share colors and type. Status messages must distinguish fictional plans, unverified imports, simulated receipts and real provider outages. Voice controls are shared through `frontend/src/Voice.tsx`; keep transcripts reviewable before sending and never put voice on a submit/payment control.

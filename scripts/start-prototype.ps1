@@ -82,7 +82,7 @@ try {
     Write-Host 'Member with broker: member@example / password'
     Write-Host 'Broker:              broker@example / password'
     Write-Host 'Regular member:      regular@example / password'
-    Write-Host 'Provider logins:     see SEED_PROVIDER_LOGINS.md'
+    Write-Host 'Provider logins:     see README.md#demo-accounts'
 }
 finally {
     Pop-Location

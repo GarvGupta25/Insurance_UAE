@@ -19,3 +19,7 @@ supabase/.branches/
 *.tsbuildinfo
 backend/*-live*.log
 frontend/vite-live*.log
+.tmp/
+video-output-*/
+skills/helm-ai-video/
+PIVOT_V2_PHASE*.png

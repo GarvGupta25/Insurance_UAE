@@ -3,8 +3,8 @@
 Run after applying `202609190002_marketplace_pivot.sql`:
     uv run python scripts/seed_marketplace_providers.py
 
-Use --skip-auth only for catalogue-only local verification. The default provisions the four
-fictional provider logins through local Supabase Auth and writes SEED_PROVIDER_LOGINS.md.
+Use --skip-auth only for catalogue-only local verification. The default provisions the
+fictional provider logins through local Supabase Auth. Credentials are documented in README.md.
 """
 
 import argparse
@@ -355,20 +355,6 @@ def provision_provider_accounts(db: Session) -> list[tuple[str, str]]:
     return credentials
 
 
-def write_credentials(credentials: list[tuple[str, str]]) -> None:
-    lines = [
-        "# DEMO/TEST CREDENTIALS - fictional providers, not real accounts",
-        "",
-        "These local-only credentials are reproducible seed data. They must never be used for real insurance,",
-        "payment, customer, or provider systems.",
-        "",
-        "| Provider login | Temporary password |",
-        "| --- | --- |",
-    ]
-    lines.extend(f"| `{email}` | `{password}` |" for email, password in credentials)
-    (ROOT / "SEED_PROVIDER_LOGINS.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -386,7 +372,6 @@ def main() -> None:
             credentials = provision_provider_accounts(db)
         db.commit()
 
-    write_credentials(credentials)
     print("Marketplace provider seed complete.")
     for provider, count in counts.items():
         print(f"{provider}: {count} plans")
