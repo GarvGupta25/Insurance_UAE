@@ -13,7 +13,7 @@ from .auth import User, current_user
 from .contracts import readiness
 from .db import session
 from .marketplace_models import MarketplaceApplication, MarketplacePlan, Provider
-from .models import Audit, Case, Profile, now
+from .models import Audit, BrokerAssignment, Case, Profile, now
 from .services import own
 
 router = APIRouter(prefix="/api/marketplace", tags=["marketplace-matching"])
@@ -60,6 +60,14 @@ def create_consented_applications(
     if consent != "yes":
         return []
 
+    if db.get(BrokerAssignment, owner_id) is None:
+        default_broker = db.scalar(
+            select(BrokerAssignment.broker_id).order_by(BrokerAssignment.created_at).limit(1)
+        )
+        if default_broker:
+            db.add(BrokerAssignment(member_id=owner_id, broker_id=default_broker))
+            db.flush()
+
     by_provider: dict[str, list[str]] = {}
     for row in ranked:
         by_provider.setdefault(row["provider_id"], []).append(row["plan_id"])
@@ -83,6 +91,7 @@ def create_consented_applications(
                     "question": CONSENT_QUESTION,
                     "ranked_plan_ids": plan_ids,
                     "shared_profile": shared_profile,
+                    "dispatch_source": "helm_matching_with_member_consent",
                 },
             )
             db.add(application)

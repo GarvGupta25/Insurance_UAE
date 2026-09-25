@@ -73,15 +73,16 @@ def main() -> None:
             {"broker": ids["broker@example"]},
         )
         db.execute(
-            text("DELETE FROM public.broker_assignments WHERE member_id = :member"),
-            {"member": ids["member@example"]},
+            text("DELETE FROM public.broker_assignments WHERE member_id IN (:member, :regular)"),
+            {"member": ids["member@example"], "regular": ids["regular@example"]},
         )
         db.execute(
             text(
                 "INSERT INTO public.broker_assignments (member_id, broker_id) "
-                "VALUES (:member, :broker)"
+                "VALUES (:member, :broker), (:regular, :broker)"
             ),
-            {"member": ids["member@example"], "broker": ids["broker@example"]},
+            {"member": ids["member@example"], "regular": ids["regular@example"],
+             "broker": ids["broker@example"]},
         )
         has_policy = db.execute(
             text("SELECT 1 FROM public.policies WHERE owner_id = :owner_id LIMIT 1"),

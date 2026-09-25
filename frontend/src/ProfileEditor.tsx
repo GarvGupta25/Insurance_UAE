@@ -10,7 +10,7 @@ const extendedRegistry: Field[][] = [
   [{ key: 'diagnosed_conditions', label: 'Diagnosed conditions', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'conditions', label: 'Conditions, separated by commas', type: 'list' }, { key: 'medications', label: 'Regular medicines (optional)', type: 'list' }, { key: 'existing_cover', label: 'Existing insurance (optional)', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'smoker', label: 'Do you smoke?', options: ['yes', 'no', 'unknown', 'declined'] }, { key: 'maternity', label: 'Include maternity?', type: 'boolean' }, { key: 'maximum_maternity_wait', label: 'Maximum maternity wait (months)', type: 'number' }, { key: 'immediate_chronic_cover', label: 'Existing-condition cover from day one?', type: 'boolean' }, { key: 'geography', label: 'Where do you need cover?', options: ['UAE', 'international', 'unsure'] }, { key: 'start_date', label: 'Desired coverage start', type: 'date' }, { key: 'near_term_needs', label: "Upcoming care needs (enter 'none' if there are none)", type: 'list' }, { key: 'upcoming_care', label: 'Additional upcoming-care details (optional)' }, { key: 'dental', label: 'Dental / optical preference', options: ['none', 'basic', 'full'] }, { key: 'preferred_network', label: 'Preferred network', options: ['restricted', 'standard', 'wide'] }, { key: 'preferred_provider', label: 'Preferred hospital or clinic (optional)' }],
   [{ key: 'payer', label: 'Who will pay?', options: ['self', 'employer', 'sponsor'] }, { key: 'annual_budget', label: 'Annual budget (AED)', type: 'number' }, { key: 'strict_budget', label: 'Is this a strict maximum?', type: 'boolean' }, { key: 'payment_frequency', label: 'Payment preference', options: ['annual', 'monthly'] }, { key: 'cost_sharing', label: 'Cost preference', options: ['lower_premium', 'lower_member_cost', 'balanced'] }, { key: 'company_name', label: 'Employer company name' }, { key: 'sponsor_name', label: 'Sponsor name' }, { key: 'sponsor_relationship', label: 'Sponsor relationship' }, { key: 'contribution_aed', label: 'Employer / sponsor contribution (AED)', type: 'number' }],
 ];
-export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () => void }) {
+export function ProfileEditor({ profile, onSaved, focusMissingRequest = 0 }: { profile: any; onSaved: () => void; focusMissingRequest?: number }) {
   const [tab, setTab] = useState(0); const [draft, setDraft] = useState<Record<string, any>>({}); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const [extraction, setExtraction] = useState<any>(null);
   const [autoAdvance, setAutoAdvance] = useState(true);
@@ -19,6 +19,12 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
   const missing: string[] = profile.readiness.missing;
   const groups = extendedGroups;
   const registry = extendedRegistry;
+  useEffect(() => {
+    if (!focusMissingRequest || !missing.length) return;
+    const nextTab = registry.findIndex(fields => fields.some(field => field.key === missing[0]));
+    if (nextTab >= 0) setTab(nextTab);
+    window.setTimeout(() => document.getElementById(`profile-${missing[0]}`)?.focus(), 0);
+  }, [focusMissingRequest]);
   function set(field: Field, value: string) {
     const parsed = value === '' ? null : field.type === 'number' ? Number(value) : field.type === 'boolean' ? value === 'true' : field.type === 'list' ? value.split(',').map(s => s.trim()).filter(Boolean) : value;
     setDraft(d => ({ ...d, [field.key]: parsed }));
@@ -61,7 +67,7 @@ export function ProfileEditor({ profile, onSaved }: { profile: any; onSaved: () 
       if (['sponsor_name', 'sponsor_relationship'].includes(f.key)) return facts.payer === 'sponsor';
       if (f.key === 'contribution_aed') return ['employer', 'sponsor'].includes(facts.payer);
       return true;
-    }).map(field => <label className="field" key={field.key}>{field.label}<span className="input-wrap">{field.options || field.type === 'boolean' ? <><select value={facts[field.key] == null ? '' : String(facts[field.key])} onChange={e => set(field, e.target.value)}><option value="">Choose an answer</option>{(field.options || ['true', 'false']).map(option => <option key={option} value={option}>{option === 'true' ? 'Yes' : option === 'false' ? 'No' : option.replaceAll('_', ' ')}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></> : <input type={field.type === 'list' ? 'text' : field.type || 'text'} min={field.type === 'number' ? 0 : undefined} value={Array.isArray(facts[field.key]) ? facts[field.key].join(', ') : facts[field.key] ?? ''} onChange={e => set(field, e.target.value)}/>}</span></label>)}</div>
+    }).map(field => <label className="field" key={field.key}>{field.label}<span className="input-wrap">{field.options || field.type === 'boolean' ? <><select id={`profile-${field.key}`} value={facts[field.key] == null ? '' : String(facts[field.key])} onChange={e => set(field, e.target.value)}><option value="">Choose an answer</option>{(field.options || ['true', 'false']).map(option => <option key={option} value={option}>{option === 'true' ? 'Yes' : option === 'false' ? 'No' : option.replaceAll('_', ' ')}</option>)}</select><ChevronDown size={14} aria-hidden="true"/></> : <input id={`profile-${field.key}`} type={field.type === 'list' ? 'text' : field.type || 'text'} min={field.type === 'number' ? 0 : undefined} value={Array.isArray(facts[field.key]) ? facts[field.key].join(', ') : facts[field.key] ?? ''} onChange={e => set(field, e.target.value)}/>}</span></label>)}</div>
     {error && <p role="alert" className="error">{error}</p>}
     <FormActions secondaryLabel={tab ? 'Back' : undefined} onSecondary={() => setTab(value => Math.max(0, value - 1))} primaryDisabled={busy || !Object.keys(draft).length} onPrimary={() => void save()} primaryLabel={<>{busy ? <LoaderCircle size={16} className="spin"/> : <Check size={16} aria-hidden="true"/>} Save details</>}/>
   </section>;

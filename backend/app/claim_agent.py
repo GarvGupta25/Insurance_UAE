@@ -1,6 +1,7 @@
 """Pre-adjudication claim intake; financial decisions remain in servicing.py."""
 
 import json
+import hashlib
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from statistics import median
 from typing import Annotated, Literal
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from groq import Groq, GroqError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -30,6 +31,7 @@ from .models import (
     Audit,
     BrokerAssignment,
     ClaimDocument,
+    ClaimDocumentFile,
     ClaimFlag,
     ClaimIntake,
     ClaimAuditLog,
@@ -666,6 +668,80 @@ async def parse_claim_attachment(policy_id: str, doc_type: DocumentType,
     return extract_claim_attachment(content, file.filename or "attachment", doc_type)
 
 
+@router.post("/{claim_intake_id}/attachments")
+async def save_claim_attachments(
+    policy_id: str, claim_intake_id: str,
+    files: list[UploadFile] = File(...), doc_types: list[DocumentType] = Form(...),
+    user: User = Depends(current_user), db: Session = Depends(session),
+    idempotency_key: str = Header(),
+):
+    policy = own(db, Policy, policy_id, user, lock=True)
+    intake = db.scalar(select(ClaimIntake).where(ClaimIntake.id == claim_intake_id,
+                                                 ClaimIntake.policy_id == policy.id).with_for_update())
+    if intake is None:
+        raise HTTPException(404, "Claim intake not found.")
+    if not 1 <= len(files) <= 5 or len(doc_types) != len(files):
+        raise HTTPException(422, "Attach one to five files, each with a document type.")
+    prepared = []
+    for file, doc_type in zip(files, doc_types):
+        content = await file.read(10 * 1024 * 1024 + 1)
+        if not content or len(content) > 10 * 1024 * 1024:
+            raise HTTPException(413, "Each attachment must be between 1 byte and 10 MB.")
+        media_type = ("application/pdf" if content.startswith(b"%PDF-") else
+                      "image/png" if content.startswith(b"\x89PNG\r\n\x1a\n") else
+                      "image/jpeg" if content.startswith(b"\xff\xd8\xff") else None)
+        if media_type is None:
+            raise HTTPException(422, "Attach a valid JPG, PNG or PDF.")
+        filename = re.sub(r"[^\w. -]", "", file.filename or "attachment")[:120] or "attachment"
+        try:
+            metadata = extract_claim_attachment(content, filename, doc_type)["metadata"]
+        except HTTPException as error:
+            if error.status_code != 503:
+                raise
+            # Keep a valid original even when optional local OCR is unavailable.
+            metadata = {"file_name": filename, "description": "Original received; text extraction unavailable"}
+        prepared.append((doc_type, filename, media_type, content, metadata))
+
+    def action():
+        if db.scalar(select(ClaimDecision.id).where(ClaimDecision.claim_intake_id == intake.id)):
+            raise HTTPException(409, "This claim already has a recorded decision.")
+        for doc_type, filename, media_type, content, metadata in prepared:
+            complete = all(_has_value(metadata.get(field)) for field in DOCUMENT_FIELDS[doc_type])
+            legacy = db.scalar(
+                select(ClaimDocument)
+                .outerjoin(ClaimDocumentFile, ClaimDocumentFile.document_id == ClaimDocument.id)
+                .where(ClaimDocument.claim_intake_id == intake.id,
+                       ClaimDocument.doc_type == doc_type,
+                       ClaimDocumentFile.document_id.is_(None))
+                .order_by(ClaimDocument.created_at, ClaimDocument.id)
+            )
+            document = legacy or ClaimDocument(claim_intake_id=intake.id, doc_type=doc_type)
+            document.extracted_fields = metadata
+            document.completeness_ok = complete
+            db.add(document)
+            db.flush()
+            db.add(ClaimDocumentFile(document_id=document.id, filename=filename,
+                                     media_type=media_type, content=content))
+        db.flush()
+        log(db, intake.id, "system", "document_ingest", "originals_received",
+            {"document_types": doc_types})
+        for flag in db.scalars(select(ClaimFlag).where(ClaimFlag.claim_intake_id == intake.id,
+                                                       ClaimFlag.flag_type == "missing_docs",
+                                                       ClaimFlag.status == "open")).all():
+            flag.status = "reviewed"
+        if intake.kind in AMOUNT_FIELDS:
+            return route_claim_intake(db, policy, intake.id, {"intake_id": intake.id})
+        analysis = analyze(db, intake, policy, REQUIRED_DOCUMENTS)
+        route = "on_call_broker" if intake.is_emergency else "review"
+        brief(db, intake, analysis, route)
+        return {"intake_id": intake.id, "route": route}
+
+    return command(db, user, idempotency_key,
+                   {"action": "claim_originals", "claim_id": intake.id,
+                    "files": [hashlib.sha256(row[3]).hexdigest() for row in prepared],
+                    "doc_types": doc_types}, action)
+
+
 @router.post("/advocate")
 def claim_advocate(policy_id: str, body: AdvocateQuestion, user: User = Depends(current_user),
                    db: Session = Depends(session)):
@@ -886,6 +962,12 @@ def member_claim_intakes(
         document_finding = db.scalar(select(ClaimFinding).where(ClaimFinding.claim_intake_id == intake.id,
                                                                ClaimFinding.agent_name == "document_verification")
                                      .order_by(ClaimFinding.created_at.desc()))
+        missing_originals = db.scalars(
+            select(ClaimDocument.doc_type)
+            .outerjoin(ClaimDocumentFile, ClaimDocumentFile.document_id == ClaimDocument.id)
+            .where(ClaimDocument.claim_intake_id == intake.id,
+                   ClaimDocumentFile.document_id.is_(None))
+        ).all()
         visible_decision = recorded if recorded and recorded.decision_type == "denied" else decision or recorded
         page = db.scalar(select(ClaimAuditLog).where(ClaimAuditLog.claim_intake_id == intake.id,
                                                      ClaimAuditLog.action == "page_attempted")
@@ -913,6 +995,7 @@ def member_claim_intakes(
                     for flag in flags
                 ],
                 "missing_documents": document_finding.payload.get("missing_docs", []) if document_finding else [],
+                "missing_original_documents": list(dict.fromkeys(missing_originals)),
                 "decision": (
                     {
                         "event_id": decision.root_id,
@@ -1088,6 +1171,8 @@ def _claim_review_item(
                 "doc_type": document.doc_type,
                 "extracted_fields": document.extracted_fields,
                 "completeness_ok": document.completeness_ok,
+                "has_original": db.scalar(select(ClaimDocumentFile.document_id).where(
+                    ClaimDocumentFile.document_id == document.id)) is not None,
                 "created_at": document.created_at.isoformat(),
             }
             for document in documents
@@ -1158,6 +1243,27 @@ def broker_claims(
         if flags:
             items.append(_claim_review_item(db, intake, policy, flags))
     return sorted(items, key=lambda item: (not item["is_emergency"], item["created_at"]))
+
+
+@broker_router.get("/{claim_intake_id}/documents/{document_id}/original")
+def broker_claim_original(claim_intake_id: str, document_id: str,
+                          user: User = Depends(require_broker), db: Session = Depends(session)):
+    allowed = db.scalar(
+        select(ClaimDocument.id)
+        .join(ClaimIntake, ClaimIntake.id == ClaimDocument.claim_intake_id)
+        .join(Policy, Policy.id == ClaimIntake.policy_id)
+        .outerjoin(BrokerAssignment, BrokerAssignment.member_id == Policy.owner_id)
+        .where(ClaimDocument.id == document_id, ClaimIntake.id == claim_intake_id,
+               or_(BrokerAssignment.broker_id == user.id,
+                   ClaimIntake.is_emergency.is_(True) & _oncall_exists(db, user.id)))
+    )
+    original = db.get(ClaimDocumentFile, document_id) if allowed else None
+    if original is None:
+        raise HTTPException(404, "Claim attachment not found.")
+    return Response(original.content, media_type=original.media_type,
+                    headers={"Content-Disposition": f'inline; filename="{original.filename.replace(chr(34), "")}"',
+                             "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                             "Content-Security-Policy": "sandbox"})
 
 
 @broker_router.get("/analytics")

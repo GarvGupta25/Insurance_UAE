@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -269,6 +270,17 @@ class ClaimFlag(Base):
     reason: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(24), default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ClaimDocumentFile(Base):
+    """Private original; unlike extracted metadata, never exposed through Supabase grants."""
+
+    __tablename__ = "claim_document_files"
+
+    document_id: Mapped[str] = mapped_column(ForeignKey("claim_documents.id", ondelete="CASCADE"), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(120))
+    media_type: Mapped[str] = mapped_column(String(40))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class ClaimFinding(Base):

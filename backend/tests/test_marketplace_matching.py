@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app import agents
 from app.marketplace_matching import create_consented_applications
 from app.marketplace_models import MarketplaceApplication, Provider
-from app.models import Base, Case, Quote, Recommendation, ReviewDecision
+from app.models import Base, BrokerAssignment, Case, Quote, Recommendation, ReviewDecision
 
 
 def plan(plan_id: str, provider_id: str, premium: int, *, network: str = "standard") -> dict:
@@ -114,6 +114,7 @@ def test_explicit_yes_creates_one_application_per_distinct_provider():
         with Session(engine) as db:
             owner_id, case_id = "member-a", "case-a"
             db.add(Case(id=case_id, owner_id=owner_id, status="open"))
+            db.add(BrokerAssignment(member_id="existing-member", broker_id="broker-a"))
             db.add_all(
                 (
                     Provider(id="provider-a", name="Provider A"),
@@ -168,6 +169,7 @@ def test_explicit_yes_creates_one_application_per_distinct_provider():
             db.commit()
 
             assert len(applications) == 2
+            assert db.get(BrokerAssignment, owner_id).broker_id == "broker-a"
             rows = db.scalars(select(MarketplaceApplication).order_by(MarketplaceApplication.provider_id)).all()
             assert [(row.provider_id, row.status) for row in rows] == [
                 ("provider-a", "sent_to_providers"),

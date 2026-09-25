@@ -8,10 +8,14 @@ type Application = {
   id: string;
   case_id: string;
   applicant_id: string;
+  provider_name: string;
+  requested_plan_ids: string[];
+  dispatch_source: string;
   status: string;
 };
 
 type Detail = Application & {
+  requested_plans: Array<{ id: string; name: string }>;
   quotations: Array<{
     id: string;
     provider: string;
@@ -72,12 +76,13 @@ export function MarketplaceBrokerPanel() {
     <div className="section-heading"><div><span className="eyebrow">PROVIDER PERFORMANCE</span><h2>Response speed and wins</h2><p>Calculated from application and quotation timestamps already in the marketplace.</p></div></div>
     <div className="provider-performance">{performance.data?.map(provider => <article className={provider.provider_id === fastestProviderId ? 'fastest' : ''} key={provider.provider_id}><span className="badge neutral">{provider.provider_id === fastestProviderId ? 'Fastest response' : 'Provider'}</span><h3>{provider.provider_name}</h3><strong>{provider.average_turnaround_hours == null ? 'No data' : `${provider.average_turnaround_hours}h`}</strong><small>average turnaround</small><p>{provider.win_rate_pct == null ? 'No submitted quotations' : `${provider.win_rate_pct}% win rate · ${provider.selected}/${provider.submitted} selected`}</p></article>)}</div>
     <div className="section-heading"><div><span className="eyebrow">MARKETPLACE</span><h2>Provider quotations and checkpoints</h2><p>Compare submitted terms and inspect both human approvals from one case record.</p></div><span className="badge neutral">{applications.data?.length || 0} applications</span></div>
-    {applications.isLoading ? <Loading/> : applications.error ? <ErrorView error={applications.error}/> : !applications.data?.length ? <div className="empty-state"><ClipboardCheck size={30}/><h3>No marketplace applications.</h3><p>Applications will appear here after customer consent.</p></div> : <div className="broker-list">{applications.data.map(item => <button className="list-row" key={item.id} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}><span className="badge neutral">{item.status.replaceAll('_', ' ')}</span><div><strong>Case {item.case_id}</strong><small>Applicant {item.applicant_id}</small></div></button>)}</div>}
+    {applications.isLoading ? <Loading/> : applications.error ? <ErrorView error={applications.error}/> : !applications.data?.length ? <div className="empty-state"><ClipboardCheck size={30}/><h3>No marketplace applications.</h3><p>Applications will appear here after customer consent.</p></div> : <div className="broker-list">{applications.data.map(item => <button className="list-row" key={item.id} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}><span className="badge neutral">{item.status.replaceAll('_', ' ')}</span><div><strong>{item.provider_name}</strong><small>Helm matched · member authorized · {item.requested_plan_ids.length} plan{item.requested_plan_ids.length === 1 ? '' : 's'} requested</small></div></button>)}</div>}
     {detail.isLoading && <Loading/>}
     {detail.error && <ErrorView error={detail.error}/>}
     {error && <ErrorView error={new Error(error)}/>}
     {detail.data && <article className="surface broker-card">
-      <div className="section-heading"><div><span className="eyebrow">QUOTATION COMPARISON</span><h2>Case {detail.data.case_id}</h2></div><span className="badge neutral">{detail.data.status.replaceAll('_', ' ')}</span></div>
+      <div className="section-heading"><div><span className="eyebrow">REQUEST DISPATCH</span><h2>{detail.data.provider_name}</h2><p>Helm recommended these plans and the member authorized sending the request.</p></div><span className="badge neutral">{detail.data.status.replaceAll('_', ' ')}</span></div>
+      <h3>Plans sent to this partner</h3>{detail.data.requested_plans.length ? <ul>{detail.data.requested_plans.map(plan => <li key={plan.id}>{plan.name}</li>)}</ul> : <p className="muted">The legacy request contains plan references but no display names.</p>}
       {!detail.data.quotations.length ? <p className="muted">No provider quotations submitted yet.</p> : <div className="plan-grid">{detail.data.quotations.map(quotation => <section className="plan-card" key={quotation.id}><div className="plan-top"><span className="eyebrow">{quotation.provider}</span><span className="badge neutral">{quotation.status}</span></div><strong className="plan-price">{aed(quotation.premium * 100)}<small>/ year</small></strong><dl className="term-list">{Object.entries(quotation.key_terms).slice(0, 5).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd></div>)}</dl><small>Submitted {new Date(quotation.submitted_at).toLocaleString()}</small></section>)}</div>}
       <h3>Checkpoint history</h3>
       {!detail.data.checkpoint_history.length ? <p className="muted">No checkpoint approval recorded.</p> : <div className="broker-list">{detail.data.checkpoint_history.map(review => <div className="list-row" key={`${review.checkpoint}-${review.approved_at}`}><Check size={18}/><div><strong>{review.checkpoint.replace('_', ' ')}</strong><small>{review.action} by {review.approved_by} · {new Date(review.approved_at).toLocaleString()}{review.note ? ` · ${review.note}` : ''}{Object.keys(review.edits || {}).length ? ` · edits: ${JSON.stringify(review.edits)}` : ''}</small></div></div>)}</div>}

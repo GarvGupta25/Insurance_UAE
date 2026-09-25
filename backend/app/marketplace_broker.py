@@ -12,6 +12,7 @@ from .auth import User, require_broker
 from .db import session
 from .marketplace_models import (
     MarketplaceApplication,
+    MarketplacePlan,
     Provider,
     ProviderFlag,
     ProviderQuotation,
@@ -218,22 +219,26 @@ def provider_performance(
 
 @router.get("/applications")
 def applications(user: User = Depends(require_broker), db: Session = Depends(session)):
-    rows = db.scalars(
-        select(MarketplaceApplication)
+    rows = db.execute(
+        select(MarketplaceApplication, Provider)
+        .join(Provider, Provider.id == MarketplaceApplication.provider_id)
         .join(BrokerAssignment, BrokerAssignment.member_id == MarketplaceApplication.owner_id)
         .where(BrokerAssignment.broker_id == user.id)
         .order_by(MarketplaceApplication.created_at)
     ).all()
     return [
         {
-            "id": row.id,
-            "case_id": row.case_id,
-            "applicant_id": row.owner_id,
-            "provider_id": row.provider_id,
-            "status": row.status,
-            "created_at": row.created_at.isoformat(),
+            "id": application.id,
+            "case_id": application.case_id,
+            "applicant_id": application.owner_id,
+            "provider_id": application.provider_id,
+            "provider_name": provider.name,
+            "requested_plan_ids": application.consent_snapshot.get("ranked_plan_ids", []),
+            "dispatch_source": application.consent_snapshot.get("dispatch_source", "member_consent"),
+            "status": application.status,
+            "created_at": application.created_at.isoformat(),
         }
-        for row in rows
+        for application, provider in rows
     ]
 
 
@@ -244,6 +249,10 @@ def application_detail(
     db: Session = Depends(session),
 ):
     application = assigned(db, MarketplaceApplication, application_id, user)
+    provider = db.get(Provider, application.provider_id)
+    requested_plan_ids = application.consent_snapshot.get("ranked_plan_ids", [])
+    requested_plans = db.scalars(select(MarketplacePlan).where(
+        MarketplacePlan.id.in_(requested_plan_ids))).all() if requested_plan_ids else []
     sibling_ids = select(MarketplaceApplication.id).where(
         MarketplaceApplication.case_id == application.case_id
     )
@@ -295,6 +304,9 @@ def application_detail(
         "id": application.id,
         "case_id": application.case_id,
         "applicant_id": application.owner_id,
+        "provider_name": provider.name if provider else application.provider_id,
+        "requested_plans": [{"id": plan.id, "name": plan.name} for plan in requested_plans],
+        "dispatch_source": application.consent_snapshot.get("dispatch_source", "member_consent"),
         "status": application.status,
         "quotations": [
             {

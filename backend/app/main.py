@@ -64,6 +64,7 @@ from .models import (
     Policy,
     PolicyReassessment,
     Profile,
+    ProfileVersion,
     Quote,
     Receipt,
     Recommendation,
@@ -352,6 +353,17 @@ def create_case(
     user: User = Depends(current_user), db: Session = Depends(session), idempotency_key: str = Header()
 ):
     def action():
+        prior_case = db.scalar(select(Case.id).where(Case.owner_id == user.id).limit(1))
+        if prior_case:
+            member_profile = profile(db, user, lock=True)
+            member_profile.version += 1
+            member_profile.facts = {}
+            member_profile.provenance = {}
+            db.add(ProfileVersion(owner_id=user.id, profile_id=member_profile.id,
+                                  version=member_profile.version, facts={}))
+            db.add(Audit(owner_id=user.id, action="profile_reset_for_new_intake",
+                         subject_id=member_profile.id,
+                         details={"version": member_profile.version}))
         row = Case(owner_id=user.id)
         db.add(row)
         db.flush()

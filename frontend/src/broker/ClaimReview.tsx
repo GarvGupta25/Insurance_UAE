@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Check, FileText, MessageSquare } from 'lucide-react';
-import { api, post } from '../api';
+import { api, auth, post } from '../api';
 import { ErrorView, Loading } from '../Shopping';
 import { ClaimOperations } from './ClaimOperations';
 
@@ -13,7 +13,7 @@ type Claim = {
   intake: { kind: string; raw_message: string | null; structured_fields: Record<string, unknown> };
   policy: { id: string; status: string; plan: Record<string, any> };
   claimant: { id: string; name: string | null };
-  documents: Array<{ id: string; doc_type: string; extracted_fields: Record<string, unknown>; completeness_ok: boolean }>;
+  documents: Array<{ id: string; doc_type: string; extracted_fields: Record<string, unknown>; completeness_ok: boolean; has_original: boolean }>;
   flags: Array<{ id: string; flag_type: string; reason: string }>;
   transcript: Array<{ role: string; content: string }>;
   suggested_action: { action: ReviewAction; reasoning: string; source: string };
@@ -34,9 +34,33 @@ function show(value: unknown) {
   return value == null || value === '' ? 'Not provided' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
 
+function OriginalPreview({ claimId, documentId }: { claimId: string; documentId: string }) {
+  const [url, setUrl] = useState('');
+  const [mediaType, setMediaType] = useState('');
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  async function view() {
+    if (open) { setOpen(false); return; }
+    if (url) { setOpen(true); return; }
+    setError('');
+    try {
+      const session = auth ? (await auth.auth.getSession()).data.session : null;
+      const response = await fetch(`/api/broker/claims/${claimId}/documents/${documentId}/original`, {
+        headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      if (!response.ok) throw new Error('The original file could not be opened. Please retry.');
+      setMediaType(response.headers.get('Content-Type') || '');
+      setUrl(URL.createObjectURL(await response.blob()));
+      setOpen(true);
+    } catch (reason) { setError((reason as Error).message); }
+  }
+  return <div className="claim-original"><div><button type="button" className="secondary" onClick={() => void view()}>{open ? 'Hide original' : 'View original image or PDF'}</button>{url && <a className="button secondary" href={url} download={`claim-document.${mediaType === 'application/pdf' ? 'pdf' : mediaType === 'image/png' ? 'png' : 'jpg'}`}>Download original</a>}</div>{error && <span role="alert">{error}</span>}{open && url && (mediaType === 'application/pdf' ? <iframe title="Uploaded claim PDF" src={url}/> : <img alt="Uploaded claim document" src={url}/>)}</div>;
+}
+
 export function ClaimReview() {
   const query = useQueryClient();
-  const claims = useQuery<Claim[]>({ queryKey: ['broker-claims'], queryFn: () => api('/api/broker/claims') });
+  const claims = useQuery<Claim[]>({ queryKey: ['broker-claims'], queryFn: () => api('/api/broker/claims'), refetchInterval: 10000 });
   const analytics = useQuery<{ total_intakes: number; straight_through: number; straight_through_rate_pct: number; definition: string }>({ queryKey: ['broker-claim-analytics'], queryFn: () => api('/api/broker/claims/analytics') });
   const [selectedId, setSelectedId] = useState('');
   const [actions, setActions] = useState<Record<string, ReviewAction>>({});
@@ -107,7 +131,7 @@ export function ClaimReview() {
         <div className="section-heading"><div><span className="eyebrow">COMPLETE CLAIM INTAKE</span><h2>{selected.claimant.name || 'Assigned member'} · {selected.intake.kind.replaceAll('_', ' ')}</h2><p>Policy {selected.policy.id} · {selected.policy.plan.name || selected.policy.status}</p></div></div>
         <section className="claim-detail-section"><h3>Intake fields</h3><dl className="claim-field-grid">{Object.entries(selected.intake.structured_fields).filter(([key]) => key !== 'follow_up').map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></section>
         <section className="claim-detail-section"><h3>Open flags</h3>{selected.flags.map(flag => <div className="claim-flag" key={flag.id}><AlertTriangle size={17}/><div><strong>{flag.flag_type.replaceAll('_', ' ')}</strong><p>{flag.reason}</p></div></div>)}</section>
-        <section className="claim-detail-section"><h3>Documents</h3>{selected.documents.map(document => <article className="claim-document" key={document.id}><div><FileText size={17}/><strong>{document.doc_type.replaceAll('_', ' ')}</strong><span className={`badge ${document.completeness_ok ? 'success' : 'urgent'}`}>{document.completeness_ok ? 'Complete' : 'Incomplete'}</span></div><dl>{Object.entries(document.extracted_fields || {}).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></article>)}</section>
+        <section className="claim-detail-section"><h3>Documents</h3>{selected.documents.map(document => <article className="claim-document" key={document.id}><div><FileText size={17}/><strong>{document.doc_type.replaceAll('_', ' ')}</strong><span className={`badge ${document.completeness_ok ? 'success' : 'urgent'}`}>{document.completeness_ok ? 'Complete' : 'Incomplete'}</span></div>{document.has_original ? <OriginalPreview claimId={selected.id} documentId={document.id}/> : <p className="muted">Original file unavailable. Ask the member to upload it again.</p>}<dl>{Object.entries(document.extracted_fields || {}).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{show(value)}</dd></div>)}</dl></article>)}</section>
         <section className="claim-detail-section"><h3>Full Claim Agent transcript</h3><div className="claim-transcript">{selected.transcript.length ? selected.transcript.map((message, index) => <div key={`${message.role}-${index}`}><MessageSquare size={16}/><p><strong>{message.role.replaceAll('_', ' ')}</strong>{message.content}</p></div>) : <p className="muted">This structured intake has no chat transcript.</p>}</div></section>
         {selected.case_brief && <section className="claim-detail-section"><h3>Case brief · suggestion only</h3><p>{selected.case_brief.summary}</p><p>Policy match: {selected.case_brief.eligibility}</p>{selected.case_brief.cited_clauses.map(clause => <p key={clause.clause_id}>{clause.clause_id}: {clause.text_snippet}</p>)}{selected.case_brief.document_status.map(doc => <p key={doc}>Missing: {doc}</p>)}{selected.case_brief.risk_flags.map(flag => <p key={flag}>{flag}</p>)}<p>Suggested next step: {actionLabels[selected.case_brief.suggested_action]}. {selected.case_brief.rationale}</p></section>}
         <section className="claim-suggestion"><span className="eyebrow">CLAIM AGENT DRAFT · HUMAN REVIEW REQUIRED</span><h3>{actionLabels[selected.suggested_action.action]}</h3><p>{selected.suggested_action.reasoning}</p></section>
